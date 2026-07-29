@@ -18,11 +18,16 @@ CONF_CHANNEL = "channel"
 CONF_GROUP = "group"
 CONF_SSIDS = "enforced_ssids"
 CONF_MIN_LIST_GUARD = "min_list_guard"
+CONF_ADOPT_BLOCKS = "adopt_blocks"
 CONF_NOTIFY_GAP = "notify_gap"
 
 DEFAULT_SCAN_INTERVAL = 30
 DEFAULT_LOOKBACK = 600
 DEFAULT_BLOCK_FIRST = True
+DEFAULT_ADOPT_BLOCKS = False
+# Refuse a runaway adoption; a first sync with many manual blocks should go
+# through the service, where it can be previewed.
+ADOPT_LIMIT = 25
 DEFAULT_MAX_PER_RUN = 10
 DEFAULT_MIN_LIST_GUARD = 25
 DEFAULT_NOTIFY_GAP = 1.0
@@ -48,8 +53,10 @@ SERVICE_EXPORT_LIST = "export_list"
 SERVICE_SET_NAME = "set_name"
 SERVICE_ALLOW_ONLINE = "allow_online_unknown"
 SERVICE_FORGET_OFFLINE = "forget_offline_pending"
+SERVICE_SYNC = "sync_from_unifi"
 
 ATTR_SITE = "site"
+ATTR_REBLOCK = "reblock"
 
 ATTR_MAC = "mac"
 ATTR_DAYS = "days"

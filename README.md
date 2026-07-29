@@ -160,6 +160,30 @@ Light and dark variants are included. Note that the HACS dashboard does not yet 
 
 MIT
 
+## Staying in sync with the controller
+
+Blocks made by hand in the UniFi UI are invisible to this integration by
+default, and a denial removed there is never re-applied. `sync_from_unifi`
+reconciles both:
+
+- **blocked there, not by us** -> moved to Denied. Devices this integration
+  blocked are already in the waiting or denied lists and are skipped, so a
+  pending approval is never quietly reversed.
+- **denied here, not blocked there** -> blocked again.
+
+Nothing is ever unblocked; removing enforcement stays a manual decision.
+
+```yaml
+action: unifi_allowlist.sync_from_unifi
+data:
+  dry_run: true    # counts go to the log, nothing changes
+```
+
+Turn on **Adopt blocks made in UniFi** in the options to run the same
+reconcile on every poll. It refuses to adopt more than 25 at once and logs
+instead, so a controller-side mistake cannot empty your allow list unattended.
+Run the service once with `dry_run: true` before enabling it.
+
 ## Multiple sites
 
 Add the integration once per UniFi site. Each site gets its own config entry,

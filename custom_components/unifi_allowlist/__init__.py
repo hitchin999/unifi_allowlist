@@ -22,6 +22,7 @@ from .const import (
     ATTR_DAYS,
     ATTR_DRY_RUN,
     ATTR_MAC,
+    ATTR_REBLOCK,
     ATTR_SITE,
     CONF_API_KEY,
     ATTR_NAME,
@@ -44,6 +45,7 @@ from .const import (
     SERVICE_EXPORT_LIST,
     SERVICE_FORGET,
     SERVICE_FORGET_OFFLINE,
+    SERVICE_SYNC,
     SERVICE_IMPORT_LIST,
     SERVICE_SET_NAME,
     SERVICE_PRUNE,
@@ -62,6 +64,13 @@ SITE_FIELD = {vol.Optional(ATTR_SITE): cv.string}
 
 MAC_SCHEMA = vol.Schema({vol.Required(ATTR_MAC): cv.string, **SITE_FIELD})
 SITE_SCHEMA = vol.Schema(SITE_FIELD)
+SYNC_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_DRY_RUN, default=True): cv.boolean,
+        vol.Optional(ATTR_REBLOCK, default=True): cv.boolean,
+        **SITE_FIELD,
+    }
+)
 FILE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_PATH): cv.string,
@@ -306,6 +315,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if coord := _target(hass, call):
             await coord.async_allow_online_unknown()
 
+    async def _sync(call):
+        if coord := _target(hass, call):
+            await coord.async_sync_from_unifi(
+                dry_run=call.data.get(ATTR_DRY_RUN, True),
+                reblock=call.data.get(ATTR_REBLOCK, True),
+            )
+
     async def _forget_offline(call):
         if coord := _target(hass, call):
             await coord.async_forget_offline_pending()
@@ -313,6 +329,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_RESEND, _resend, schema=SITE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online, schema=SITE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline, schema=SITE_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_SET_NAME, _set_name, schema=NAME_SCHEMA
     )

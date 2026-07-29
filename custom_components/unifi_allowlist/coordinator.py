@@ -14,6 +14,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import UnifiClient, UnifiError
 from .const import (
     ACTION_PREFIX,
+    ADOPT_LIMIT,
+    CONF_ADOPT_BLOCKS,
     CONF_BLOCK_FIRST,
     CONF_CHANNEL,
     CONF_GROUP,
@@ -23,6 +25,7 @@ from .const import (
     CONF_SITE,
     CONF_SCAN_INTERVAL,
     CONF_SSIDS,
+    DEFAULT_ADOPT_BLOCKS,
     DEFAULT_BLOCK_FIRST,
     DEFAULT_CHANNEL,
     DEFAULT_GROUP,
@@ -181,6 +184,8 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         if self._controller_name is None:
             await self._refresh_controller_name()
+
+        await self._auto_sync()
 
         if not self.wlan_names:
             await self._refresh_wlans()
@@ -595,6 +600,111 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
         _LOGGER.info("forgot %d offline waiting device(s)", gone)
         return gone
+
+    async def async_sync_from_unifi(
+        self,
+        dry_run: bool = True,
+        reblock: bool = True,
+        limit: int | None = None,
+        refresh: bool = True,
+    ) -> dict:
+        """Reconcile our lists against what the controller actually enforces.
+
+        Drift happens whenever somebody blocks or unblocks a client in the
+        UniFi UI. Two directions:
+
+        adopt   - blocked on the controller but not by us. Somebody made that
+                  decision by hand, so it becomes a denial here. Devices we
+                  blocked ourselves sit in pending or denied already and are
+                  skipped, so approving from a notification is never undone.
+        reblock - denied here but not blocked there. Our denial was quietly
+                  reversed; put it back.
+
+        Nothing is unblocked. Removing enforcement is never done implicitly.
+        """
+        try:
+            known = await self.client.known_clients()
+        except UnifiError as err:
+            _LOGGER.error("sync failed: %s", err)
+            return {"error": str(err), "adopted": 0, "reblocked": 0}
+
+        names: dict[str, str] = {}
+        on_controller: set[str] = set()
+        for rec in known or []:
+            mac = str(rec.get("mac") or "").lower()
+            if not mac:
+                continue
+            if rec.get("blocked"):
+                on_controller.add(mac)
+            names[mac] = rec.get("name") or rec.get("hostname") or ""
+
+        ours = set(self.store.denied) | set(self.store.pending)
+        adopt = sorted(on_controller - ours)
+        # Denied here, free there. Only chase ones the controller knows about.
+        drifted = sorted((set(self.store.denied) & set(names)) - on_controller)
+
+        from_allowed = [m for m in adopt if m in self.store.allowed]
+        result = {
+            "adopted": len(adopt),
+            "from_allowed": len(from_allowed),
+            "reblocked": len(drifted) if reblock else 0,
+            "dry_run": dry_run,
+            "macs": adopt[:50],
+        }
+
+        if limit is not None and len(adopt) > limit:
+            _LOGGER.error(
+                "sync: %d blocks to adopt exceeds the limit of %d, skipping. "
+                "Run the sync_from_unifi service to review and apply them.",
+                len(adopt),
+                limit,
+            )
+            result["skipped"] = True
+            return result
+
+        if dry_run:
+            _LOGGER.warning(
+                "sync preview: would deny %d device(s) blocked in UniFi "
+                "(%d currently allowed here), and re-block %d denied device(s) "
+                "that are no longer blocked there",
+                len(adopt),
+                len(from_allowed),
+                len(drifted) if reblock else 0,
+            )
+            return result
+
+        if adopt:
+            await self.store.async_deny_many(adopt, source="unifi")
+            _LOGGER.warning(
+                "sync: adopted %d block(s) from UniFi, %d of which were allowed here",
+                len(adopt),
+                len(from_allowed),
+            )
+
+        if reblock and drifted:
+            for mac in drifted:
+                await self._safe_block(mac)
+            _LOGGER.warning("sync: re-blocked %d denied device(s)", len(drifted))
+
+        if adopt or (reblock and drifted):
+            if refresh:
+                await self.async_request_refresh()
+            await self._notify_plain(
+                "Wifi access",
+                f"Synced with UniFi: {len(adopt)} newly denied, "
+                f"{len(drifted) if reblock else 0} re-blocked",
+                icon="mdi:sync",
+            )
+        return result
+
+    async def _auto_sync(self) -> None:
+        """The same reconcile, run each poll when the option is on."""
+        if not bool(self._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)):
+            return
+        # Already inside a poll, so no refresh request from here.
+        await self.async_sync_from_unifi(
+            dry_run=False, limit=ADOPT_LIMIT, refresh=False
+        )
 
     async def async_unblock_all(self) -> int:
         try:

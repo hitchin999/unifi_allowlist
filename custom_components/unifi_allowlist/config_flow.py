@@ -26,6 +26,7 @@ from homeassistant.helpers.selector import (
 from .api import UnifiAuthError, UnifiClient, UnifiError
 from .const import (
     CONF_API_KEY,
+    CONF_ADOPT_BLOCKS,
     CONF_BLOCK_FIRST,
     CONF_CHANNEL,
     CONF_GROUP,
@@ -39,6 +40,7 @@ from .const import (
     CONF_SITE,
     CONF_SSIDS,
     CONF_VERIFY_SSL,
+    DEFAULT_ADOPT_BLOCKS,
     DEFAULT_BLOCK_FIRST,
     DEFAULT_CHANNEL,
     DEFAULT_GROUP,
@@ -225,6 +227,10 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                         custom_value=True,
                     )
                 ),
+                vol.Optional(
+                    CONF_ADOPT_BLOCKS,
+                    default=current.get(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS),
+                ): bool,
                 vol.Optional(
                     CONF_BLOCK_FIRST,
                     default=current.get(CONF_BLOCK_FIRST, DEFAULT_BLOCK_FIRST),

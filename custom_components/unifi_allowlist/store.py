@@ -177,6 +177,26 @@ class DeviceStore:
             await self.async_save()
         return moved
 
+    async def async_deny_many(self, macs: list[str], source: str = "") -> int:
+        """Deny several at once, moving each out of pending or allowed."""
+        moved = 0
+        now = int(time.time())
+        for mac in macs:
+            mac = _norm(mac)
+            if not mac or mac in self.denied:
+                continue
+            rec = self.pending.pop(mac, None) or self.allowed.pop(mac, None) or {}
+            self.denied[mac] = {
+                "name": rec.get("name", ""),
+                "ssid": rec.get("ssid", ""),
+                "added": now,
+                "source": source or "unifi",
+            }
+            moved += 1
+        if moved:
+            await self.async_save()
+        return moved
+
     async def async_bulk_allow(self, macs: list[str]) -> int:
         added = 0
         now = int(time.time())

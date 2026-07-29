@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to UniFi",
-        "description": "Create an API key in UniFi under Settings \u2192 Integrations, then paste it here.",
+        "description": "Create an API key in UniFi under Settings → Integrations, then paste it here.",
         "data": {
           "host": "Controller URL",
           "api_key": "API key",
@@ -41,7 +41,11 @@
           "channel": "Android notification channel",
           "group": "Android notification group",
           "min_list_guard": "Refuse to enforce if the allow list is smaller than",
-          "notify_gap": "Pause between notifications"
+          "notify_gap": "Pause between notifications",
+          "adopt_blocks": "Adopt blocks made in UniFi"
+        },
+        "data_description": {
+          "adopt_blocks": "Each poll, move devices blocked in the UniFi UI into Denied, and re-apply blocks that were removed there. Off by default."
         }
       }
     }

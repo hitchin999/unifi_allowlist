@@ -235,3 +235,38 @@ allow_online_unknown:
       selector:
         config_entry:
           integration: unifi_allowlist
+
+sync_from_unifi:
+  name: Sync with UniFi
+  description: >-
+    Reconcile this integration against what the controller is actually
+    enforcing. Devices blocked in the UniFi UI that this integration did not
+    block are moved to Denied. Devices denied here that are no longer blocked
+    on the controller are blocked again. Nothing is ever unblocked. Leave dry
+    run on first to see the counts in the log without changing anything.
+  fields:
+    dry_run:
+      name: Dry run
+      description: Report what would change without changing it.
+      required: false
+      default: true
+      selector:
+        boolean:
+    reblock:
+      name: Re-block drifted denials
+      description: >-
+        Also re-apply blocks for devices denied here that are no longer blocked
+        on the controller.
+      required: false
+      default: true
+      selector:
+        boolean:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
