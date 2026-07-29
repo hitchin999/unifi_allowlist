@@ -178,6 +178,21 @@ no hostname has no text to match. It is a wide net — cameras, intercoms and
 plenty of IoT hardware report nothing — so look through the waiting list before
 switching it on.
 
+## Denied means blocked
+
+The Denied tab lists everything this integration is holding blocked on the
+controller, so its count lines up with UniFi's blocked filter. Devices still
+awaiting a verdict appear there too, tagged **awaiting review**, because a
+waiting device is a blocked device — it just has no decision attached yet. They
+are not stored twice; the waiting queue is the same records, flagged.
+
+From the Denied tab an awaiting-review row offers Allow (let it on and drop the
+block), Deny (confirm the block and clear it from the queue) or Forget.
+
+The match is over **wireless clients only**. Wired clients are outside this
+integration's scope everywhere else and are never adopted or blocked here, so
+UniFi's blocked count includes any wired blocks that this will not touch.
+
 ## Staying in sync with the controller
 
 Blocks made by hand in the UniFi UI are invisible to this integration by
@@ -197,8 +212,10 @@ data:
   dry_run: true    # counts go to the log, nothing changes
 ```
 
-Turn on **Adopt blocks made in UniFi** in the options to run the same
-reconcile on every poll. It refuses to adopt more than 25 at once and logs
+Re-applying a block for something already in the denied or waiting lists runs
+on every poll and cannot be turned off — that is the invariant. **Adopt blocks
+made in UniFi** (on by default) additionally pulls in blocks somebody else
+made. It refuses to adopt more than 25 at once and logs
 instead, so a controller-side mistake cannot empty your allow list unattended.
 Run the service once with `dry_run: true` before enabling it.
 

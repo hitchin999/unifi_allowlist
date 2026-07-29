@@ -472,6 +472,9 @@ class UnifiAllowlistDataView(HomeAssistantView):
                     }
                     for mac, info in store.allowed.items()
                 ],
+                # Everything this integration is holding blocked, so the tab
+                # lines up with the controller's blocked list. Devices still
+                # awaiting a verdict are flagged rather than stored twice.
                 "denied": [
                     {
                         "mac": mac,
@@ -479,8 +482,20 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "label": store.label_for(mac),
                         "ip": live_ips.get(mac, ""),
                         "ap": live_aps.get(mac, ""),
+                        "review": False,
                     }
                     for mac, info in store.denied.items()
+                ]
+                + [
+                    {
+                        "mac": mac,
+                        "name": store.name_for(mac) or live_names.get(mac, ""),
+                        "label": store.label_for(mac),
+                        "ip": (info or {}).get("ip") or live_ips.get(mac, ""),
+                        "ap": (info or {}).get("ap") or live_aps.get(mac, ""),
+                        "review": True,
+                    }
+                    for mac, info in store.pending.items()
                 ],
                 "entry_id": coord.entry_id,
                 "site": coord.site,

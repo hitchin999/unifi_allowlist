@@ -720,6 +720,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         reblock: bool = True,
         limit: int | None = None,
         refresh: bool = True,
+        adopt_blocks: bool = True,
     ) -> dict:
         """Reconcile our lists against what the controller actually enforces.
 
@@ -747,14 +748,19 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             mac = str(rec.get("mac") or "").lower()
             if not mac:
                 continue
+            # Wired gear is out of scope for this integration everywhere else,
+            # so it must not be dragged in here either.
+            if rec.get("is_wired"):
+                continue
             if rec.get("blocked"):
                 on_controller.add(mac)
             names[mac] = rec.get("name") or rec.get("hostname") or ""
 
         ours = set(self.store.denied) | set(self.store.pending)
-        adopt = sorted(on_controller - ours)
-        # Denied here, free there. Only chase ones the controller knows about.
-        drifted = sorted((set(self.store.denied) & set(names)) - on_controller)
+        adopt = sorted(on_controller - ours) if adopt_blocks else []
+        # Held blocked here, free there. Waiting devices count: they are blocked
+        # pending a verdict, so a lost block is just as wrong for them.
+        drifted = sorted((ours & set(names)) - on_controller)
 
         from_allowed = [m for m in adopt if m in self.store.allowed]
         result = {
@@ -812,11 +818,14 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
     async def _auto_sync(self) -> None:
         """The same reconcile, run each poll when the option is on."""
-        if not bool(self._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)):
-            return
-        # Already inside a poll, so no refresh request from here.
+        # Re-applying a block we already decided on is never a surprise, so it
+        # runs unconditionally. Adopting somebody else's block is a judgement
+        # call and stays behind the option.
         await self.async_sync_from_unifi(
-            dry_run=False, limit=ADOPT_LIMIT, refresh=False
+            dry_run=False,
+            limit=ADOPT_LIMIT,
+            refresh=False,
+            adopt_blocks=bool(self._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)),
         )
 
     async def async_unblock_untracked(self) -> int:

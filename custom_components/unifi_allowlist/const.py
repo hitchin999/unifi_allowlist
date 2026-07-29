@@ -27,7 +27,7 @@ CONF_NOTIFY_GAP = "notify_gap"
 DEFAULT_SCAN_INTERVAL = 30
 DEFAULT_LOOKBACK = 600
 DEFAULT_BLOCK_FIRST = True
-DEFAULT_ADOPT_BLOCKS = False
+DEFAULT_ADOPT_BLOCKS = True
 DEFAULT_FORGET_IN_UNIFI = True
 DEFAULT_DENY_UNNAMED = False
 # Refuse a runaway adoption; a first sync with many manual blocks should go
