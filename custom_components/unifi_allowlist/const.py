@@ -49,6 +49,8 @@ SERVICE_SET_NAME = "set_name"
 SERVICE_ALLOW_ONLINE = "allow_online_unknown"
 SERVICE_FORGET_OFFLINE = "forget_offline_pending"
 
+ATTR_SITE = "site"
+
 ATTR_MAC = "mac"
 ATTR_DAYS = "days"
 ATTR_DRY_RUN = "dry_run"

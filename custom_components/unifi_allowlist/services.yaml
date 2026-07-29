@@ -8,6 +8,15 @@ allow:
       example: "a4:83:e7:12:34:56"
       selector:
         text:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 deny:
   name: Deny device
@@ -19,6 +28,15 @@ deny:
       example: "a4:83:e7:12:34:56"
       selector:
         text:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 forget:
   name: Forget device
@@ -29,6 +47,15 @@ forget:
       required: true
       selector:
         text:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 forget_offline_pending:
   name: Forget offline waiting devices
@@ -36,16 +63,46 @@ forget_offline_pending:
     Clear every device in the waiting queue that is not connected right now.
     Useful when phones using randomised MAC addresses leave behind a trail of
     dead entries. Devices still on the wifi are left alone.
+  fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 resend_pending:
   name: Resend pending
   description: Send a fresh notification for every device still waiting on an answer.
+  fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 unblock_all:
   name: Unblock everything
   description: >-
     Clear every block on the controller. The deny list is left alone, so
     deliberately denied devices are re-blocked on the next poll.
+  fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 prune:
   name: Prune stale devices
@@ -66,6 +123,15 @@ prune:
       default: true
       selector:
         boolean:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 import_list:
   name: Import MAC list from file
@@ -87,6 +153,15 @@ import_list:
           options:
             - allowed
             - denied
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 export_list:
   name: Export MAC list to file
@@ -106,6 +181,15 @@ export_list:
           options:
             - allowed
             - denied
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 set_name:
   name: Name a device
@@ -125,6 +209,15 @@ set_name:
       example: "Kitchen tablet"
       selector:
         text:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
 
 allow_online_unknown:
   name: Allow everything on wifi now
@@ -132,3 +225,13 @@ allow_online_unknown:
     Approve every unknown device currently connected. Intended for setting up a
     new site: turn enforcement off, let the list fill with the devices you
     already trust, run this once, then turn enforcement back on.
+  fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist

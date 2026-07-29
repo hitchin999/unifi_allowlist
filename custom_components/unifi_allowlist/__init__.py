@@ -11,6 +11,7 @@ from homeassistant.components import frontend
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
@@ -21,6 +22,7 @@ from .const import (
     ATTR_DAYS,
     ATTR_DRY_RUN,
     ATTR_MAC,
+    ATTR_SITE,
     CONF_API_KEY,
     ATTR_NAME,
     ATTR_PATH,
@@ -56,18 +58,23 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-MAC_SCHEMA = vol.Schema({vol.Required(ATTR_MAC): cv.string})
+SITE_FIELD = {vol.Optional(ATTR_SITE): cv.string}
+
+MAC_SCHEMA = vol.Schema({vol.Required(ATTR_MAC): cv.string, **SITE_FIELD})
+SITE_SCHEMA = vol.Schema(SITE_FIELD)
 FILE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_PATH): cv.string,
         vol.Optional(ATTR_TARGET, default=LIST_ALLOWED): vol.In(
             [LIST_ALLOWED, LIST_DENIED]
         ),
+        **SITE_FIELD,
     }
 )
 NAME_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_MAC): cv.string,
+        **SITE_FIELD,
         vol.Optional(ATTR_NAME, default=""): cv.string,
     }
 )
@@ -75,6 +82,7 @@ PRUNE_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_DAYS, default=7): vol.Coerce(int),
         vol.Optional(ATTR_DRY_RUN, default=True): cv.boolean,
+        **SITE_FIELD,
     }
 )
 
@@ -204,32 +212,84 @@ def _first_coordinator(hass: HomeAssistant) -> UnifiAllowlistCoordinator | None:
     return None
 
 
+def _all_coordinators(hass: HomeAssistant) -> list[UnifiAllowlistCoordinator]:
+    return [d["coordinator"] for d in (hass.data.get(DOMAIN) or {}).values()]
+
+
+def _coordinator_by_id(
+    hass: HomeAssistant, wanted: str
+) -> UnifiAllowlistCoordinator | None:
+    """Match a site by entry id, UniFi site name, or entry title."""
+    wanted = (wanted or "").strip()
+    if not wanted:
+        return None
+    folded = wanted.casefold()
+    for coord in _all_coordinators(hass):
+        if wanted == coord.entry_id:
+            return coord
+    for coord in _all_coordinators(hass):
+        if folded in (coord.site.casefold(), coord.site_title.casefold()):
+            return coord
+    return None
+
+
+def _target(hass: HomeAssistant, call) -> UnifiAllowlistCoordinator | None:
+    """Which site a service call is about.
+
+    One site configured: that one, whether or not it was named. Several: the
+    call has to say which. Guessing here would silently write a decision to
+    the wrong controller, so an unmatched or missing name raises instead.
+    """
+    coords = _all_coordinators(hass)
+    if not coords:
+        return None
+
+    wanted = (call.data or {}).get(ATTR_SITE)
+    if wanted:
+        found = _coordinator_by_id(hass, wanted)
+        if found:
+            return found
+        known = ", ".join(f"{c.site} ({c.site_title})" for c in coords)
+        raise ServiceValidationError(
+            f"No UniFi Allow List site matches '{wanted}'. Configured: {known}"
+        )
+
+    if len(coords) == 1:
+        return coords[0]
+
+    known = ", ".join(f"{c.site} ({c.site_title})" for c in coords)
+    raise ServiceValidationError(
+        "More than one UniFi Allow List site is set up, so this call needs a "
+        f"'site' value. Configured: {known}"
+    )
+
+
 def _async_register_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, SERVICE_ALLOW):
         return
 
     async def _allow(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_allow(call.data[ATTR_MAC])
 
     async def _deny(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_deny(call.data[ATTR_MAC])
 
     async def _forget(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_forget_mac(call.data[ATTR_MAC])
 
     async def _resend(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_resend_pending()
 
     async def _unblock_all(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_unblock_all()
 
     async def _prune(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_prune(
                 days=call.data.get(ATTR_DAYS, 7),
                 dry_run=call.data.get(ATTR_DRY_RUN, True),
@@ -239,38 +299,36 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_DENY, _deny, schema=MAC_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_FORGET, _forget, schema=MAC_SCHEMA)
     async def _set_name(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_set_name(call.data[ATTR_MAC], call.data.get(ATTR_NAME, ""))
 
     async def _allow_online(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_allow_online_unknown()
 
     async def _forget_offline(call):
-        if coord := _first_coordinator(hass):
+        if coord := _target(hass, call):
             await coord.async_forget_offline_pending()
 
-    hass.services.async_register(DOMAIN, SERVICE_RESEND, _resend)
-    hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online)
-    hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline)
+    hass.services.async_register(DOMAIN, SERVICE_RESEND, _resend, schema=SITE_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online, schema=SITE_SCHEMA)
+    hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline, schema=SITE_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_SET_NAME, _set_name, schema=NAME_SCHEMA
     )
-    hass.services.async_register(DOMAIN, SERVICE_UNBLOCK_ALL, _unblock_all)
+    hass.services.async_register(DOMAIN, SERVICE_UNBLOCK_ALL, _unblock_all, schema=SITE_SCHEMA)
     async def _import_list(call):
-        for data in (hass.data.get(DOMAIN) or {}).values():
-            await data["store"].async_import_file(
+        if coord := _target(hass, call):
+            await coord.store.async_import_file(
                 hass, call.data[ATTR_PATH], call.data[ATTR_TARGET]
             )
-            await data["coordinator"].async_request_refresh()
-            return
+            await coord.async_request_refresh()
 
     async def _export_list(call):
-        for data in (hass.data.get(DOMAIN) or {}).values():
-            await data["store"].async_export_file(
+        if coord := _target(hass, call):
+            await coord.store.async_export_file(
                 hass, call.data[ATTR_PATH], call.data[ATTR_TARGET]
             )
-            return
 
     hass.services.async_register(DOMAIN, SERVICE_PRUNE, _prune, schema=PRUNE_SCHEMA)
     hass.services.async_register(
@@ -290,11 +348,27 @@ def _async_register_action_listener(hass: HomeAssistant, entry: ConfigEntry) -> 
             return
 
         rest = action[len(ACTION_PREFIX) :]
-        kind, _, mac = rest.partition("_")
-        if not mac:
+        kind, _, tail = rest.partition("_")
+        if not tail:
             return
 
-        coord = _first_coordinator(hass)
+        # Since 1.3.0 the action carries the entry it came from, so a tap
+        # lands on the site that asked. Older notifications sent just the MAC
+        # and are answered by the first site, as they used to be.
+        target_id, _, mac = tail.partition("_")
+        if not mac:
+            mac = target_id
+            coord = _first_coordinator(hass)
+            # Every entry hears the event; only one should act on a legacy id.
+            if not coord or coord.entry_id != entry.entry_id:
+                return
+        else:
+            if target_id != entry.entry_id:
+                return
+            coord = (hass.data.get(DOMAIN) or {}).get(entry.entry_id, {}).get(
+                "coordinator"
+            )
+
         if not coord:
             return
 
@@ -317,9 +391,22 @@ class UnifiAllowlistDataView(HomeAssistantView):
         self.hass = hass
 
     async def get(self, request):
-        coord = _first_coordinator(self.hass)
-        if not coord:
+        coords = _all_coordinators(self.hass)
+        if not coords:
             return self.json({"error": "not set up"}, status_code=404)
+
+        wanted = request.query.get("entry_id")
+        coord = next((c for c in coords if c.entry_id == wanted), None) or coords[0]
+
+        sites = [
+            {
+                "entry_id": c.entry_id,
+                "site": c.site,
+                "title": c.site_title,
+                "pending": len(c.store.pending),
+            }
+            for c in coords
+        ]
 
         store = coord.store
         live_macs = {r["mac"] for r in coord.online if r["live"]}
@@ -368,6 +455,10 @@ class UnifiAllowlistDataView(HomeAssistantView):
                     }
                     for mac, info in store.denied.items()
                 ],
+                "entry_id": coord.entry_id,
+                "site": coord.site,
+                "title": coord.site_title,
+                "sites": sites,
                 "enforcing": coord.enforcing,
                 "ssids": sorted(n for n in coord.wlan_names.values() if n),
                 "aps": sorted(set(coord.ap_names.values())),

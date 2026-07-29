@@ -159,3 +159,26 @@ Light and dark variants are included. Note that the HACS dashboard does not yet 
 ## License
 
 MIT
+
+## Multiple sites
+
+Add the integration once per UniFi site. Each site gets its own config entry,
+its own allow list, its own enforcement switch and its own polling — they never
+share state.
+
+- **Panel** — a site picker appears in the header as soon as a second site is
+  configured, showing the waiting count per site. The choice is remembered.
+- **Notifications** — the prompt names the site it came from, and Allow / Keep
+  blocked act on that site. A device approved on one site stays unknown on the
+  others, which is the point.
+- **Services** — every service takes an optional `site`. With one site set up it
+  is optional and ignored. With several it is required, and a call without it
+  fails with a message listing the configured sites rather than guessing.
+
+```yaml
+action: unifi_allowlist.allow
+data:
+  mac: "a4:83:e7:12:34:56"
+  site: "01K2ABCDEF..."   # config entry, or the UniFi site name
+```
+

@@ -59,6 +59,18 @@ const STYLES = `
   .menu svg { display: block; width: 24px; height: 24px; fill: currentColor; }
   :host([narrow]) .menu { display: block; }
   .sub { margin-top: 2px; font-size: 13px; color: var(--secondary-text-color); }
+  .sitepick {
+    margin-top: 4px;
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--divider-color);
+    background: var(--card-background-color);
+    color: var(--primary-text-color);
+    max-width: 100%;
+  }
+  .sitepick:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
   .guard { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--secondary-text-color); }
   .pill { padding: 4px 11px; border-radius: 14px; font-size: 12px; font-weight: 500; border: 1px solid transparent; }
   .pill.on {
@@ -348,11 +360,31 @@ class UnifiAllowlistPanel extends HTMLElement {
     window.removeEventListener("popstate", this._boundPop);
   }
 
+  static _savedSite() {
+    try {
+      return window.localStorage.getItem("ual_site") || "";
+    } catch (err) {
+      return "";
+    }
+  }
+
+  static _saveSite(id) {
+    try {
+      window.localStorage.setItem("ual_site", id || "");
+    } catch (err) {
+      /* private mode, or storage disabled - the picker still works */
+    }
+  }
+
   async _load() {
     if (!this._hass) return;
+    if (this._entryId === undefined) this._entryId = UnifiAllowlistPanel._savedSite();
     try {
-      this._data = await this._hass.callApi("GET", "unifi_allowlist/data");
+      const qs = this._entryId ? `?entry_id=${encodeURIComponent(this._entryId)}` : "";
+      this._data = await this._hass.callApi("GET", `unifi_allowlist/data${qs}`);
       this._error = this._data.error || null;
+      // The server falls back to the first site if the saved one is gone.
+      if (this._data.entry_id) this._entryId = this._data.entry_id;
     } catch (err) {
       this._error = "Could not load data. Check that the integration is set up.";
     }
@@ -362,7 +394,9 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   async _call(service, payload) {
     try {
-      await this._hass.callService("unifi_allowlist", service, payload || {});
+      const body = { ...(payload || {}) };
+      if (this._entryId) body.site = this._entryId;
+      await this._hass.callService("unifi_allowlist", service, body);
       await new Promise((r) => setTimeout(r, 500));
       await this._load();
     } catch (err) {
@@ -395,6 +429,7 @@ class UnifiAllowlistPanel extends HTMLElement {
               <div>
               <h1>Wifi Access</h1>
               <div class="sub" id="sub"></div>
+              <select class="sitepick" id="sitepick" aria-label="Site" hidden></select>
               </div>
             </div>
             <div class="guard" id="guard"></div>
@@ -409,6 +444,23 @@ class UnifiAllowlistPanel extends HTMLElement {
     `;
 
     const root = this.shadowRoot;
+
+    root.getElementById("sitepick").addEventListener("change", (ev) => {
+      const id = ev.target.value;
+      if (!id || id === this._entryId) return;
+      this._entryId = id;
+      UnifiAllowlistPanel._saveSite(id);
+      // Anything half-finished belongs to the site we just left.
+      this._editing = null;
+      this._busy = {};
+      this._closeConfirm();
+      this._query = "";
+      const search = this.shadowRoot.getElementById("search");
+      if (search) search.value = "";
+      this._loading = true;
+      this._render();
+      this._load();
+    });
 
     root.getElementById("menu").addEventListener("click", () => {
       // Handled by <home-assistant> up in the light DOM.
@@ -520,6 +572,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     const banner = root.getElementById("banner");
     const sub = root.getElementById("sub");
     const guard = root.getElementById("guard");
+    this._renderSitePicker(root.getElementById("sitepick"), d);
 
     let bannerHtml = "";
     if (this._error) {
@@ -758,6 +811,29 @@ class UnifiAllowlistPanel extends HTMLElement {
       (rows.length > MAX_ROWS
         ? `<div class="more">Showing ${MAX_ROWS} of ${rows.length}. Search to narrow it down.</div>`
         : "");
+  }
+
+  _renderSitePicker(pick, d) {
+    if (!pick) return;
+    const sites = (d && d.sites) || [];
+    // Only worth showing when there is a choice to make.
+    if (sites.length < 2) {
+      pick.hidden = true;
+      pick.innerHTML = "";
+      return;
+    }
+    const current = this._entryId || (d && d.entry_id) || sites[0].entry_id;
+    const markup = sites
+      .map((s) => {
+        const waiting = s.pending ? ` - ${s.pending} waiting` : "";
+        return `<option value="${this._esc(s.entry_id)}"${
+          s.entry_id === current ? " selected" : ""
+        }>${this._esc(s.title || s.site)}${waiting}</option>`;
+      })
+      .join("");
+    if (pick.innerHTML !== markup) pick.innerHTML = markup;
+    pick.value = current;
+    pick.hidden = false;
   }
 
   _emptyText() {

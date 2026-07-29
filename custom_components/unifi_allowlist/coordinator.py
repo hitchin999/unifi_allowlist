@@ -19,6 +19,7 @@ from .const import (
     CONF_LOOKBACK,
     CONF_MAX_PER_RUN,
     CONF_NOTIFY,
+    CONF_SITE,
     CONF_SCAN_INTERVAL,
     CONF_SSIDS,
     DEFAULT_BLOCK_FIRST,
@@ -68,6 +69,27 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             update_interval=timedelta(seconds=self._opt(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
         )
+
+    # --- identity ----------------------------------------------------------
+
+    @property
+    def entry_id(self) -> str:
+        return self.entry.entry_id
+
+    @property
+    def site(self) -> str:
+        """UniFi site name, e.g. 'jyltil67'."""
+        return str(self._opt(CONF_SITE, "") or "")
+
+    @property
+    def site_title(self) -> str:
+        """What the user called this entry, e.g. 'Wifi Access (Camp X)'."""
+        return self.entry.title or self.site or "UniFi"
+
+    @property
+    def _multi_site(self) -> bool:
+        """True when more than one config entry is loaded."""
+        return len(self.hass.data.get(DOMAIN, {})) > 1
 
     # --- options helpers ---------------------------------------------------
 
@@ -425,13 +447,21 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 "color": "#e8a33d",
                 "sticky": "true",
                 "actions": [
-                    {"action": f"{ACTION_PREFIX}OK_{mac}", "title": "Allow"},
-                    {"action": f"{ACTION_PREFIX}NO_{mac}", "title": "Keep blocked"},
+                    {
+                        "action": f"{ACTION_PREFIX}OK_{self.entry_id}_{mac}",
+                        "title": "Allow",
+                    },
+                    {
+                        "action": f"{ACTION_PREFIX}NO_{self.entry_id}_{mac}",
+                        "title": "Keep blocked",
+                    },
                 ],
             }
         )
 
         title = "Blocked a new device" if blocked else "New device on wifi"
+        if self._multi_site:
+            title = f"{title} - {self.site_title}"
         lines = [name, mac]
         if ip:
             lines.append(f"IP: {ip}")
