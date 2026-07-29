@@ -15,7 +15,7 @@
         "description": "Pick which site to police, and where approval prompts should go. Sites are listed alphabetically.",
         "data": {
           "site": "Site",
-          "notify_service": "Notification target"
+          "notify_service": "Notification targets"
         }
       }
     },
@@ -32,7 +32,7 @@
       "init": {
         "title": "Wifi Access settings",
         "data": {
-          "notify_service": "Notification target",
+          "notify_service": "Notification targets",
           "enforced_ssids": "Only police these SSIDs (leave empty for all)",
           "block_first": "Block on sight, then ask",
           "scan_interval": "Check every",

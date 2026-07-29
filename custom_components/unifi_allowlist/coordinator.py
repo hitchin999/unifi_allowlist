@@ -75,8 +75,34 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         return self.entry.options.get(key, self.entry.data.get(key, default))
 
     @property
+    def notify_targets(self) -> list[str]:
+        """Every notify service that should receive prompts.
+
+        Stored as a list since 1.1.0; a bare string from an older config entry
+        still works and is treated as a one-item list.
+        """
+        raw = self._opt(CONF_NOTIFY, None)
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        return [t for t in raw if t]
+
+    @property
     def notify_service(self) -> str | None:
-        return self._opt(CONF_NOTIFY, None)
+        """First target. Kept for anything still expecting a single service."""
+        targets = self.notify_targets
+        return targets[0] if targets else None
+
+    async def _async_send(self, payload: dict) -> None:
+        """Fan a notify payload out to every configured target."""
+        for target in self.notify_targets:
+            try:
+                await self.hass.services.async_call(
+                    "notify", target, payload, blocking=False
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("notify to %s failed: %s", target, err)
 
     @property
     def enforced_ssids(self) -> list[str]:
@@ -367,21 +393,14 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     async def _notify_plain(
         self, title: str, message: str, icon: str = "mdi:wifi", color: str | None = None
     ) -> None:
-        target = self.notify_service
-        if not target:
+        if not self.notify_targets:
             return
         data = self._base_data()
         data["importance"] = "high"
         data["notification_icon"] = icon
         if color:
             data["color"] = color
-        try:
-            await self.hass.services.async_call(
-                "notify", target, {"title": title, "message": message, "data": data},
-                blocking=False,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("notify failed: %s", err)
+        await self._async_send({"title": title, "message": message, "data": data})
 
     async def _notify_device(
         self,
@@ -394,8 +413,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         ip: str = "",
         ap: str = "",
     ) -> None:
-        target = self.notify_service
-        if not target:
+        if not self.notify_targets:
             return
 
         data = self._base_data()
@@ -423,27 +441,16 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         lines.append(where)
         message = "\n".join(lines)
 
-        try:
-            await self.hass.services.async_call(
-                "notify", target, {"title": title, "message": message, "data": data},
-                blocking=False,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("notify failed: %s", err)
+        await self._async_send({"title": title, "message": message, "data": data})
 
     async def async_clear_notification(self, mac: str) -> None:
-        target = self.notify_service
-        if not target:
-            return
-        try:
-            await self.hass.services.async_call(
-                "notify",
-                target,
-                {"message": "clear_notification", "data": {"tag": f"ual_{mac}"}},
-                blocking=False,
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("clear failed: %s", err)
+        """Pull the prompt for this MAC off every device that got it.
+
+        Whoever answers first wins; the card disappears for everyone else.
+        """
+        await self._async_send(
+            {"message": "clear_notification", "data": {"tag": f"ual_{mac}"}}
+        )
 
     async def async_resend_pending(self) -> int:
         for mac, info in list(self.store.pending.items()):

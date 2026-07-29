@@ -53,6 +53,15 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _as_list(value) -> list[str]:
+    """Old entries stored a single notify service as a string."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [v for v in value if v]
+
+
 def _notify_services(hass) -> list[str]:
     services = hass.services.async_services().get("notify", {})
     return sorted(s for s in services if s not in ("persistent_notification",))
@@ -127,7 +136,7 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 site,
             )
             data = {**self._creds, CONF_SITE: site}
-            options = {CONF_NOTIFY: user_input.get(CONF_NOTIFY)}
+            options = {CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY))}
             return self.async_create_entry(title=f"Wifi Access ({label})", data=data, options=options)
 
         site_options = sorted(
@@ -151,11 +160,12 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         options=site_options, mode=SelectSelectorMode.DROPDOWN
                     )
                 ),
-                vol.Optional(CONF_NOTIFY): SelectSelector(
+                vol.Optional(CONF_NOTIFY, default=[]): SelectSelector(
                     SelectSelectorConfig(
                         options=notify_options,
                         mode=SelectSelectorMode.DROPDOWN,
                         custom_value=True,
+                        multiple=True,
                     )
                 ),
             }
@@ -181,6 +191,7 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
             merged[CONF_MAX_PER_RUN] = int(merged[CONF_MAX_PER_RUN])
             merged[CONF_MIN_LIST_GUARD] = int(merged[CONF_MIN_LIST_GUARD])
             merged[CONF_NOTIFY_GAP] = float(merged[CONF_NOTIFY_GAP])
+            merged[CONF_NOTIFY] = _as_list(merged.get(CONF_NOTIFY))
             return self.async_create_entry(title="", data=merged)
 
         ssid_choices: list[str] = []
@@ -195,12 +206,13 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Optional(
-                    CONF_NOTIFY, default=current.get(CONF_NOTIFY, "")
+                    CONF_NOTIFY, default=_as_list(current.get(CONF_NOTIFY))
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=_notify_services(self.hass),
                         mode=SelectSelectorMode.DROPDOWN,
                         custom_value=True,
+                        multiple=True,
                     )
                 ),
                 vol.Optional(

@@ -40,6 +40,24 @@ const STYLES = `
     gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
   }
   .head h1 { margin: 0; font-size: 22px; font-weight: 500; }
+  .title { display: flex; align-items: center; gap: 6px; }
+  /* sidebar toggle: only useful on the narrow/mobile layout, where Home
+     Assistant hides its own toolbar for custom panels */
+  .menu {
+    display: none;
+    flex: 0 0 auto;
+    margin: -6px 0 -6px -8px;
+    padding: 6px;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--primary-text-color);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .menu:hover { background: var(--secondary-background-color); }
+  .menu svg { display: block; width: 24px; height: 24px; fill: currentColor; }
+  :host([narrow]) .menu { display: block; }
   .sub { margin-top: 2px; font-size: 13px; color: var(--secondary-text-color); }
   .guard { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--secondary-text-color); }
   .pill { padding: 4px 11px; border-radius: 14px; font-size: 12px; font-weight: 500; border: 1px solid transparent; }
@@ -300,6 +318,15 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._render();
   }
 
+  set narrow(value) {
+    this._narrow = Boolean(value);
+    this.toggleAttribute("narrow", this._narrow);
+  }
+
+  get narrow() {
+    return this._narrow === true;
+  }
+
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
@@ -360,9 +387,14 @@ class UnifiAllowlistPanel extends HTMLElement {
       <div class="wrap">
         <div class="sticky">
           <div class="head">
-            <div>
+            <div class="title">
+              <button class="menu" id="menu" aria-label="Open sidebar" title="Menu">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+              </button>
+              <div>
               <h1>Wifi Access</h1>
               <div class="sub" id="sub"></div>
+              </div>
             </div>
             <div class="guard" id="guard"></div>
           </div>
@@ -376,6 +408,13 @@ class UnifiAllowlistPanel extends HTMLElement {
     `;
 
     const root = this.shadowRoot;
+
+    root.getElementById("menu").addEventListener("click", () => {
+      // Handled by <home-assistant> up in the light DOM.
+      this.dispatchEvent(
+        new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })
+      );
+    });
 
     root.getElementById("search").addEventListener("input", (ev) => {
       this._query = ev.target.value.trim().toLowerCase();
