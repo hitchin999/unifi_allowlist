@@ -27,6 +27,9 @@ from .api import UnifiAuthError, UnifiClient, UnifiError
 from .const import (
     CONF_API_KEY,
     CONF_ADOPT_BLOCKS,
+    CONF_DENY_NAMES,
+    CONF_DENY_UNNAMED,
+    CONF_FORGET_IN_UNIFI,
     CONF_BLOCK_FIRST,
     CONF_CHANNEL,
     CONF_GROUP,
@@ -41,6 +44,8 @@ from .const import (
     CONF_SSIDS,
     CONF_VERIFY_SSL,
     DEFAULT_ADOPT_BLOCKS,
+    DEFAULT_DENY_UNNAMED,
+    DEFAULT_FORGET_IN_UNIFI,
     DEFAULT_BLOCK_FIRST,
     DEFAULT_CHANNEL,
     DEFAULT_GROUP,
@@ -227,6 +232,26 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                         custom_value=True,
                     )
                 ),
+                vol.Optional(
+                    CONF_DENY_NAMES, default=current.get(CONF_DENY_NAMES, [])
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[],
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST,
+                        custom_value=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_DENY_UNNAMED,
+                    default=current.get(CONF_DENY_UNNAMED, DEFAULT_DENY_UNNAMED),
+                ): bool,
+                vol.Optional(
+                    CONF_FORGET_IN_UNIFI,
+                    default=current.get(
+                        CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI
+                    ),
+                ): bool,
                 vol.Optional(
                     CONF_ADOPT_BLOCKS,
                     default=current.get(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS),

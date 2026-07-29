@@ -160,6 +160,24 @@ Light and dark variants are included. Note that the HACS dashboard does not yet 
 
 MIT
 
+## Silencing a phone that rotates its MAC
+
+A phone with private Wi-Fi addresses on arrives as a brand new device every
+time it rejoins, so denying it once does nothing. **Always block these device
+names** in the options takes the name the client reports, case insensitive,
+with `*` and `?` wildcards. A match is blocked immediately with no notification
+and no waiting-list entry, so the queue stays clean however many addresses the
+phone invents.
+
+Names come from the device and can be changed by whoever owns it, so this is
+noise control, not access control. Anyone who renames their phone walks
+straight past it.
+
+**Always block devices that report no name** is separate, because a device with
+no hostname has no text to match. It is a wide net — cameras, intercoms and
+plenty of IoT hardware report nothing — so look through the waiting list before
+switching it on.
+
 ## Staying in sync with the controller
 
 Blocks made by hand in the UniFi UI are invisible to this integration by

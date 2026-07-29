@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 import re
 import time
@@ -16,7 +17,10 @@ from .const import (
     ACTION_PREFIX,
     ADOPT_LIMIT,
     CONF_ADOPT_BLOCKS,
+    CONF_DENY_NAMES,
+    CONF_DENY_UNNAMED,
     CONF_BLOCK_FIRST,
+    CONF_FORGET_IN_UNIFI,
     CONF_CHANNEL,
     CONF_GROUP,
     CONF_LOOKBACK,
@@ -26,6 +30,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SSIDS,
     DEFAULT_ADOPT_BLOCKS,
+    DEFAULT_DENY_UNNAMED,
+    DEFAULT_FORGET_IN_UNIFI,
     DEFAULT_BLOCK_FIRST,
     DEFAULT_CHANNEL,
     DEFAULT_GROUP,
@@ -67,6 +73,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self.online: list[dict] = []
         self._breaker_tripped = False
         self._controller_name: str | None = None
+        self.suppressed_last_run = 0
 
         super().__init__(
             hass,
@@ -90,6 +97,35 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     def site_title(self) -> str:
         """What the user called this entry, e.g. 'Wifi Access (Camp X)'."""
         return self.entry.title or self.site or "UniFi"
+
+    # --- name based suppression -------------------------------------------
+
+    @property
+    def deny_name_patterns(self) -> list[str]:
+        raw = self._opt(CONF_DENY_NAMES, None) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        return [str(p).strip().casefold() for p in raw if str(p).strip()]
+
+    def _denied_by_name(self, rec: dict) -> str | None:
+        """Which rule, if any, says to suppress this device.
+
+        Matching is on the name the client reports, case-insensitively, with
+        * and ? wildcards. A device reporting no name at all is only caught by
+        the separate 'unnamed' option, since there is no text to match.
+        """
+        reported = str(rec.get("hostname") or rec.get("name") or "").strip()
+        if not reported:
+            if bool(self._opt(CONF_DENY_UNNAMED, DEFAULT_DENY_UNNAMED)):
+                return "(no name)"
+            return None
+        folded = reported.casefold()
+        for pattern in self.deny_name_patterns:
+            if pattern == folded or fnmatch.fnmatch(folded, pattern):
+                return pattern
+            if "*" not in pattern and "?" not in pattern and pattern in folded:
+                return pattern
+        return None
 
     async def _refresh_controller_name(self) -> None:
         """Ask the console what it calls itself. Cosmetic, so failure is fine."""
@@ -404,8 +440,19 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._breaker_tripped = False
         block_first = bool(self._opt(CONF_BLOCK_FIRST, DEFAULT_BLOCK_FIRST))
 
+        suppressed = 0
         for mac in fresh:
             rec = seen[mac]
+
+            if rule := self._denied_by_name(rec):
+                # Blocked, but no queue entry and no notification. A phone with
+                # MAC randomisation would otherwise prompt again on every new
+                # address it invents.
+                await self._safe_block(mac)
+                suppressed += 1
+                _LOGGER.debug("suppressed %s by name rule %r", mac, rule)
+                continue
+
             name = (
                 self.store.label_for(mac) or rec.get("hostname") or "no name"
             )
@@ -430,6 +477,12 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 ap=ap,
             )
             await asyncio.sleep(float(self._opt(CONF_NOTIFY_GAP, DEFAULT_NOTIFY_GAP)))
+
+        self.suppressed_last_run = suppressed
+        if suppressed:
+            _LOGGER.info(
+                "blocked %d device(s) silently by name rule this run", suppressed
+            )
 
     async def _safe_block(self, mac: str) -> None:
         try:
@@ -532,6 +585,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 blocked=True,
             )
             await asyncio.sleep(float(self._opt(CONF_NOTIFY_GAP, DEFAULT_NOTIFY_GAP)))
+
         return len(self.store.pending)
 
     # --- actions -----------------------------------------------------------
@@ -575,9 +629,66 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.store.async_set_label(mac, name)
         await self.async_request_refresh()
 
+    async def _async_remove_from_controller(self, macs: list[str]) -> dict:
+        """Delete these clients from UniFi, the way Forget does in its UI.
+
+        forget-sta wipes the client record outright - alias, fixed IP
+        reservation, usage history, the lot, with no undo. That is right for a
+        randomised MAC that is never coming back, and wrong for a device
+        somebody has deliberately labelled or given a static lease. Those are
+        merely unblocked instead, so nothing an admin set up is destroyed.
+        """
+        macs = [m for m in {str(m).strip().lower() for m in macs} if m]
+        if not macs:
+            return {"forgotten": 0, "unblocked": 0}
+
+        try:
+            known = await self.client.known_clients()
+        except UnifiError as err:
+            _LOGGER.warning("could not read clients before forgetting: %s", err)
+            for mac in macs:
+                await self._safe_unblock(mac)
+            return {"forgotten": 0, "unblocked": len(macs)}
+
+        protected: set[str] = set()
+        for rec in known or []:
+            mac = str(rec.get("mac") or "").lower()
+            if mac not in macs:
+                continue
+            if str(rec.get("name") or "").strip() or rec.get("use_fixedip"):
+                protected.add(mac)
+
+        doomed = [m for m in macs if m not in protected]
+
+        for i in range(0, len(doomed), FORGET_BATCH_SIZE):
+            chunk = doomed[i : i + FORGET_BATCH_SIZE]
+            try:
+                await self.client.forget(chunk)
+            except UnifiError as err:
+                _LOGGER.error("forget-sta failed, unblocking instead: %s", err)
+                for mac in chunk:
+                    await self._safe_unblock(mac)
+            if len(doomed) > FORGET_BATCH_SIZE:
+                await asyncio.sleep(PRUNE_BATCH_PAUSE)
+
+        for mac in protected:
+            await self._safe_unblock(mac)
+
+        if protected:
+            _LOGGER.warning(
+                "kept %d client record(s) in UniFi because they have a name or a "
+                "fixed IP; unblocked them instead of forgetting",
+                len(protected),
+            )
+        return {"forgotten": len(doomed), "unblocked": len(protected)}
+
     async def async_forget_mac(self, mac: str) -> None:
         mac = mac.strip().lower()
         await self.store.async_forget(mac)
+        # "As if never seen" has to include the controller, or our lists and
+        # UniFi drift apart and a later sync adopts it straight back.
+        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
+            await self._async_remove_from_controller([mac])
         # Pull any outstanding prompt for it off every phone.
         await self.async_clear_notification(mac)
         await self.async_request_refresh()
@@ -595,6 +706,8 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if not macs:
             return 0
         gone = await self.store.async_forget_many(macs)
+        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
+            await self._async_remove_from_controller(macs)
         for mac in macs:
             await self.async_clear_notification(mac)
         await self.async_request_refresh()
@@ -705,6 +818,40 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_sync_from_unifi(
             dry_run=False, limit=ADOPT_LIMIT, refresh=False
         )
+
+    async def async_unblock_untracked(self) -> int:
+        """Unblock devices the controller blocks but we have no record of.
+
+        This is the cleanup for blocks left stranded by an earlier forget, or
+        adopted and then removed. Anything in denied or waiting is left alone,
+        so it will not hand access to something you meant to keep out.
+        """
+        try:
+            known = await self.client.known_clients()
+        except UnifiError as err:
+            _LOGGER.error("unblock_untracked failed: %s", err)
+            return 0
+
+        ours = set(self.store.denied) | set(self.store.pending)
+        stranded = [
+            mac
+            for u in known or []
+            if u.get("blocked")
+            and (mac := str(u.get("mac") or "").lower())
+            and mac not in ours
+        ]
+        for mac in stranded:
+            await self._safe_unblock(mac)
+
+        _LOGGER.warning("unblocked %d stranded block(s)", len(stranded))
+        if stranded:
+            await self._notify_plain(
+                "Wifi access",
+                f"Unblocked {len(stranded)} device(s) with no record here",
+                icon="mdi:wifi-check",
+            )
+            await self.async_request_refresh()
+        return len(stranded)
 
     async def async_unblock_all(self) -> int:
         try:

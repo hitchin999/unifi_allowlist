@@ -46,6 +46,7 @@ from .const import (
     SERVICE_FORGET,
     SERVICE_FORGET_OFFLINE,
     SERVICE_SYNC,
+    SERVICE_UNBLOCK_UNTRACKED,
     SERVICE_IMPORT_LIST,
     SERVICE_SET_NAME,
     SERVICE_PRUNE,
@@ -315,6 +316,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if coord := _target(hass, call):
             await coord.async_allow_online_unknown()
 
+    async def _unblock_untracked(call):
+        if coord := _target(hass, call):
+            await coord.async_unblock_untracked()
+
     async def _sync(call):
         if coord := _target(hass, call):
             await coord.async_sync_from_unifi(
@@ -330,6 +335,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online, schema=SITE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline, schema=SITE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
+    hass.services.async_register(
+        DOMAIN, SERVICE_UNBLOCK_UNTRACKED, _unblock_untracked, schema=SITE_SCHEMA
+    )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_NAME, _set_name, schema=NAME_SCHEMA
     )

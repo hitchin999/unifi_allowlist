@@ -19,12 +19,17 @@ CONF_GROUP = "group"
 CONF_SSIDS = "enforced_ssids"
 CONF_MIN_LIST_GUARD = "min_list_guard"
 CONF_ADOPT_BLOCKS = "adopt_blocks"
+CONF_FORGET_IN_UNIFI = "forget_in_unifi"
+CONF_DENY_NAMES = "deny_names"
+CONF_DENY_UNNAMED = "deny_unnamed"
 CONF_NOTIFY_GAP = "notify_gap"
 
 DEFAULT_SCAN_INTERVAL = 30
 DEFAULT_LOOKBACK = 600
 DEFAULT_BLOCK_FIRST = True
 DEFAULT_ADOPT_BLOCKS = False
+DEFAULT_FORGET_IN_UNIFI = True
+DEFAULT_DENY_UNNAMED = False
 # Refuse a runaway adoption; a first sync with many manual blocks should go
 # through the service, where it can be previewed.
 ADOPT_LIMIT = 25
@@ -54,6 +59,7 @@ SERVICE_SET_NAME = "set_name"
 SERVICE_ALLOW_ONLINE = "allow_online_unknown"
 SERVICE_FORGET_OFFLINE = "forget_offline_pending"
 SERVICE_SYNC = "sync_from_unifi"
+SERVICE_UNBLOCK_UNTRACKED = "unblock_untracked"
 
 ATTR_SITE = "site"
 ATTR_REBLOCK = "reblock"

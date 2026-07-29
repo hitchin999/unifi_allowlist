@@ -270,3 +270,20 @@ sync_from_unifi:
       selector:
         config_entry:
           integration: unifi_allowlist
+
+unblock_untracked:
+  name: Unblock stranded devices
+  description: >-
+    Unblock every device the controller is blocking that this integration has
+    no record of. Use this to clean up blocks left behind by Forget. Devices in
+    the denied or waiting lists are left blocked.
+  fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist

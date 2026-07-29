@@ -42,10 +42,16 @@
           "group": "Android notification group",
           "min_list_guard": "Refuse to enforce if the allow list is smaller than",
           "notify_gap": "Pause between notifications",
-          "adopt_blocks": "Adopt blocks made in UniFi"
+          "adopt_blocks": "Adopt blocks made in UniFi",
+          "deny_names": "Always block these device names",
+          "deny_unnamed": "Always block devices that report no name",
+          "forget_in_unifi": "Also remove the client from UniFi when forgetting"
         },
         "data_description": {
-          "adopt_blocks": "Each poll, move devices blocked in the UniFi UI into Denied, and re-apply blocks that were removed there. Off by default."
+          "adopt_blocks": "Each poll, move devices blocked in the UniFi UI into Denied, and re-apply blocks that were removed there. Off by default.",
+          "deny_names": "One entry per name, case insensitive, * and ? wildcards allowed. Matching devices are blocked silently with no notification and no queue entry. Names are reported by the device and can be changed, so treat this as noise control rather than security.",
+          "deny_unnamed": "Devices with no hostname at all. This catches a lot of legitimate hardware such as cameras and IoT gear, so check the waiting list before turning it on.",
+          "forget_in_unifi": "Deletes the client record on the controller, the same as Forget in the UniFi UI - alias, fixed IP and history included, with no undo. Clients that have a name or a fixed IP set in UniFi are only unblocked instead, so nothing you configured there is destroyed."
         }
       }
     }
