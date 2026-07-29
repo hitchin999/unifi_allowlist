@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import timedelta
 
@@ -62,6 +63,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._devices_stamp = 0.0
         self.online: list[dict] = []
         self._breaker_tripped = False
+        self._controller_name: str | None = None
 
         super().__init__(
             hass,
@@ -85,6 +87,35 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     def site_title(self) -> str:
         """What the user called this entry, e.g. 'Wifi Access (Camp X)'."""
         return self.entry.title or self.site or "UniFi"
+
+    async def _refresh_controller_name(self) -> None:
+        """Ask the console what it calls itself. Cosmetic, so failure is fine."""
+        info = await self.client.sysinfo()
+        self._controller_name = str(
+            info.get("name") or info.get("hostname") or ""
+        ).strip()
+
+    @property
+    def controller_label(self) -> str:
+        """Console name, falling back to the host you typed in."""
+        if self._controller_name:
+            return self._controller_name
+        host = re.sub(r"^https?://", "", self.client.host or "")
+        return host.split("/")[0].split(":")[0] or "UniFi"
+
+    @property
+    def site_label(self) -> str:
+        """Short name for the site, without the 'Wifi Access (...)' wrapper.
+
+        Entry titles are built as 'Wifi Access (Camp X)'. Repeating that next
+        to a heading that already says Wifi Access reads badly, so pull the
+        inside out when it matches and fall back to whatever we have.
+        """
+        title = (self.entry.title or "").strip()
+        match = re.fullmatch(r"Wifi Access \((.+)\)", title)
+        if match:
+            return match.group(1).strip()
+        return title or self.site or "UniFi"
 
     @property
     def _multi_site(self) -> bool:
@@ -147,6 +178,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(str(err)) from err
 
         self.last_error = None
+
+        if self._controller_name is None:
+            await self._refresh_controller_name()
 
         if not self.wlan_names:
             await self._refresh_wlans()

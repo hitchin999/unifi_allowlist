@@ -403,6 +403,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "entry_id": c.entry_id,
                 "site": c.site,
                 "title": c.site_title,
+                "label": c.site_label,
+                "controller": c.controller_label,
                 "pending": len(c.store.pending),
             }
             for c in coords
@@ -458,6 +460,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "entry_id": coord.entry_id,
                 "site": coord.site,
                 "title": coord.site_title,
+                "label": coord.site_label,
+                "controller": coord.controller_label,
                 "sites": sites,
                 "enforcing": coord.enforcing,
                 "ssids": sorted(n for n in coord.wlan_names.values() if n),

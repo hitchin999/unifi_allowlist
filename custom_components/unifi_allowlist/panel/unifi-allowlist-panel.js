@@ -39,7 +39,7 @@ const STYLES = `
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
   }
-  .head h1 { margin: 0; font-size: 22px; font-weight: 500; }
+  .head h1 { margin: 0; font-size: 22px; font-weight: 500; overflow-wrap: anywhere; }
   .title { display: flex; align-items: center; gap: 6px; }
   /* sidebar toggle: only useful on the narrow/mobile layout, where Home
      Assistant hides its own toolbar for custom panels */
@@ -427,7 +427,7 @@ class UnifiAllowlistPanel extends HTMLElement {
                 <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
               </button>
               <div>
-              <h1>Wifi Access</h1>
+              <h1 id="title">Wifi Access</h1>
               <div class="sub" id="sub"></div>
               <select class="sitepick" id="sitepick" aria-label="Site" hidden></select>
               </div>
@@ -573,6 +573,12 @@ class UnifiAllowlistPanel extends HTMLElement {
     const sub = root.getElementById("sub");
     const guard = root.getElementById("guard");
     this._renderSitePicker(root.getElementById("sitepick"), d);
+
+    const title = root.getElementById("title");
+    const multi = d && (d.sites || []).length > 1;
+    const named = multi ? UnifiAllowlistPanel._siteName(d) : "";
+    const heading = named ? `Wifi Access \u2014 ${named}` : "Wifi Access";
+    if (title && title.textContent !== heading) title.textContent = heading;
 
     let bannerHtml = "";
     if (this._error) {
@@ -813,6 +819,13 @@ class UnifiAllowlistPanel extends HTMLElement {
         : "");
   }
 
+  static _siteName(s) {
+    const site = s.label || s.title || s.site || "";
+    const controller = s.controller || "";
+    if (controller && site) return `${controller} \u2022 ${site}`;
+    return controller || site;
+  }
+
   _renderSitePicker(pick, d) {
     if (!pick) return;
     const sites = (d && d.sites) || [];
@@ -828,7 +841,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         const waiting = s.pending ? ` - ${s.pending} waiting` : "";
         return `<option value="${this._esc(s.entry_id)}"${
           s.entry_id === current ? " selected" : ""
-        }>${this._esc(s.title || s.site)}${waiting}</option>`;
+        }>${this._esc(UnifiAllowlistPanel._siteName(s))}${waiting}</option>`;
       })
       .join("");
     if (pick.innerHTML !== markup) pick.innerHTML = markup;

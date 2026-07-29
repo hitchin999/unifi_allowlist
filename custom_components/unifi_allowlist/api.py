@@ -85,6 +85,22 @@ class UnifiClient:
             "GET", "/proxy/network/integration/v1/info"
         )
 
+    async def sysinfo(self) -> dict:
+        """Controller identity. Returns {} rather than raising - cosmetic only."""
+        try:
+            rows = await self._request(
+                "GET", f"/proxy/network/api/s/{self._site}/stat/sysinfo"
+            )
+        except UnifiError:
+            return {}
+        if isinstance(rows, list):
+            return rows[0] if rows else {}
+        return rows if isinstance(rows, dict) else {}
+
+    @property
+    def host(self) -> str:
+        return self._host
+
     async def sites(self) -> list[dict]:
         return await self._request("GET", "/proxy/network/api/self/sites")
 
