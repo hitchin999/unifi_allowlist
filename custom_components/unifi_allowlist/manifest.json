@@ -1,0 +1,17 @@
+{
+  "domain": "unifi_allowlist",
+  "name": "UniFi Allow List",
+  "codeowners": [
+    "@hitchin999"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "http",
+    "frontend"
+  ],
+  "documentation": "https://github.com/hitchin999/unifi_allowlist",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/hitchin999/unifi_allowlist/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

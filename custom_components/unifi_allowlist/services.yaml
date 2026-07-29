@@ -1,0 +1,127 @@
+allow:
+  name: Allow device
+  description: Add a MAC to the allow list and unblock it on the controller.
+  fields:
+    mac:
+      name: MAC address
+      required: true
+      example: "a4:83:e7:12:34:56"
+      selector:
+        text:
+
+deny:
+  name: Deny device
+  description: Add a MAC to the deny list and block it on the controller.
+  fields:
+    mac:
+      name: MAC address
+      required: true
+      example: "a4:83:e7:12:34:56"
+      selector:
+        text:
+
+forget:
+  name: Forget device
+  description: Remove a MAC from every list. It will be treated as new next time it appears.
+  fields:
+    mac:
+      name: MAC address
+      required: true
+      selector:
+        text:
+
+resend_pending:
+  name: Resend pending
+  description: Send a fresh notification for every device still waiting on an answer.
+
+unblock_all:
+  name: Unblock everything
+  description: >-
+    Clear every block on the controller. The deny list is left alone, so
+    deliberately denied devices are re-blocked on the next poll.
+
+prune:
+  name: Prune stale devices
+  description: >-
+    Forget offline wireless clients on the controller and drop them from the
+    allow list. Wired devices, denied devices and pending devices are skipped.
+  fields:
+    days:
+      name: Not seen for (days)
+      default: 7
+      selector:
+        number:
+          min: 0
+          max: 365
+          mode: box
+    dry_run:
+      name: Preview only
+      default: true
+      selector:
+        boolean:
+
+import_list:
+  name: Import MAC list from file
+  description: >-
+    Read MAC addresses from a file and add them to a list. Accepts a JSON array,
+    a JSON object keyed by MAC, or plain text with one MAC per line.
+  fields:
+    path:
+      name: File path
+      required: true
+      example: /config/known_macs.json
+      selector:
+        text:
+    target:
+      name: Add to
+      default: allowed
+      selector:
+        select:
+          options:
+            - allowed
+            - denied
+
+export_list:
+  name: Export MAC list to file
+  description: Write a list out as a JSON array, for backup or seeding another site.
+  fields:
+    path:
+      name: File path
+      required: true
+      example: /config/allow_list_backup.json
+      selector:
+        text:
+    target:
+      name: Export
+      default: allowed
+      selector:
+        select:
+          options:
+            - allowed
+            - denied
+
+set_name:
+  name: Name a device
+  description: >-
+    Give a device your own name. It overrides whatever the controller reports
+    and follows the MAC between the allow and deny lists. Leave the name empty
+    to clear it.
+  fields:
+    mac:
+      name: MAC address
+      required: true
+      example: "a4:83:e7:12:34:56"
+      selector:
+        text:
+    name:
+      name: Name
+      example: "Kitchen tablet"
+      selector:
+        text:
+
+allow_online_unknown:
+  name: Allow everything on wifi now
+  description: >-
+    Approve every unknown device currently connected. Intended for setting up a
+    new site: turn enforcement off, let the list fill with the devices you
+    already trust, run this once, then turn enforcement back on.

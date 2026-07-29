@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to UniFi",
+        "description": "Create an API key in UniFi under Settings \u2192 Integrations, then paste it here.",
+        "data": {
+          "host": "Controller URL",
+          "api_key": "API key",
+          "verify_ssl": "Verify the SSL certificate"
+        }
+      },
+      "site": {
+        "title": "Choose the site",
+        "description": "Pick which site to police, and where approval prompts should go. Sites are listed alphabetically.",
+        "data": {
+          "site": "Site",
+          "notify_service": "Notification target"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the controller. Check the URL and port.",
+      "invalid_auth": "The controller rejected that API key."
+    },
+    "abort": {
+      "already_configured": "That site is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wifi Access settings",
+        "data": {
+          "notify_service": "Notification target",
+          "enforced_ssids": "Only police these SSIDs (leave empty for all)",
+          "block_first": "Block on sight, then ask",
+          "scan_interval": "Check every",
+          "lookback": "Also catch devices seen within",
+          "max_per_run": "Stop and alert if more than this appear at once",
+          "channel": "Android notification channel",
+          "group": "Android notification group",
+          "min_list_guard": "Refuse to enforce if the allow list is smaller than",
+          "notify_gap": "Pause between notifications"
+        }
+      }
+    }
+  }
+}
