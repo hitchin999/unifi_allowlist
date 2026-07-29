@@ -41,6 +41,7 @@ from .const import (
     SERVICE_DENY,
     SERVICE_EXPORT_LIST,
     SERVICE_FORGET,
+    SERVICE_FORGET_OFFLINE,
     SERVICE_IMPORT_LIST,
     SERVICE_SET_NAME,
     SERVICE_PRUNE,
@@ -245,8 +246,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if coord := _first_coordinator(hass):
             await coord.async_allow_online_unknown()
 
+    async def _forget_offline(call):
+        if coord := _first_coordinator(hass):
+            await coord.async_forget_offline_pending()
+
     hass.services.async_register(DOMAIN, SERVICE_RESEND, _resend)
     hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online)
+    hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline)
     hass.services.async_register(
         DOMAIN, SERVICE_SET_NAME, _set_name, schema=NAME_SCHEMA
     )

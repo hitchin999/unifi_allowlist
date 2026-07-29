@@ -164,7 +164,7 @@ const STYLES = `
   .chip.unknown { color: var(--warning-color, #e8a33d); }
   .chip.denied  { color: var(--error-color, #d9534f); }
 
-  .actions { display: flex; gap: 8px; flex: 0 0 auto; }
+  .actions { display: flex; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
   button.act {
     appearance: none; font: inherit; font-size: 13px; padding: 7px 14px;
     border-radius: 18px; cursor: pointer; white-space: nowrap;
@@ -174,6 +174,7 @@ const STYLES = `
   button.act:hover { background: var(--secondary-background-color); }
   button.act.allow { border-color: var(--success-color, #3d9970); color: var(--success-color, #3d9970); }
   button.act.deny  { border-color: var(--error-color, #d9534f); color: var(--error-color, #d9534f); }
+  button.act.forget { color: var(--secondary-text-color); border-color: var(--divider-color); }
   button.act:disabled { opacity: .45; cursor: default; }
   button.act:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
 
@@ -197,7 +198,7 @@ const STYLES = `
     .detail { font-size: 12px; gap: 1px 10px; }
     /* chip above the buttons keeps rows compact instead of full width */
     .side { flex-direction: column; align-items: flex-end; gap: 6px; }
-    button.act { padding: 6px 12px; }
+    button.act { padding: 6px 10px; font-size: 12.5px; }
   }
 `;
 
@@ -451,6 +452,11 @@ class UnifiAllowlistPanel extends HTMLElement {
         return;
       }
       if (ev.target.id === "bulkYes") {
+        if (this._tab === "pending") {
+          this._closeConfirm();
+          this._call("forget_offline_pending", {});
+          return;
+        }
         this._closeConfirm();
         this._call("allow_online_unknown", {});
         return;
@@ -599,6 +605,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         name: p.name,
         label: p.label,
         ip: p.ip,
+        live: p.live,
         status: "unknown",
         fields: [
           { v: p.mac, mono: true },
@@ -636,7 +643,9 @@ class UnifiAllowlistPanel extends HTMLElement {
       return { allow: status !== "allowed", deny: status !== "denied", forget: false };
     }
     if (this._tab === "pending") {
-      return { allow: true, deny: true, forget: false };
+      // Forget is not a verdict — it just drops the row. Randomised MACs make
+      // the queue fill with entries that are never coming back.
+      return { allow: true, deny: true, forget: true };
     }
     return {
       allow: this._tab === "denied",
@@ -666,6 +675,22 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
 
     let bulk = "";
+    if (this._tab === "pending" && !this._query) {
+      const n = rows.filter((r) => !r.live).length;
+      if (n) {
+        bulk = this._confirmBulk
+          ? `<div class="bulk"><span>Forget all ${n} waiting device${
+              n === 1 ? "" : "s"
+            } that ${n === 1 ? "is" : "are"} not on the wifi now? They are not
+             allowed or denied — they just leave the queue.</span>
+             <span><button id="bulkNo">Cancel</button>
+             <button class="confirm" id="bulkYes">Yes, forget ${n}</button></span></div>`
+          : `<div class="bulk"><span>${n} waiting device${
+              n === 1 ? " is" : "s are"
+            } no longer on the wifi.</span>
+             <button id="bulkGo">Forget all ${n}</button></div>`;
+      }
+    }
     if (this._tab === "online" && !this._query) {
       const n = rows.filter((r) => r.status === "unknown").length;
       if (n) {
@@ -716,7 +741,7 @@ class UnifiAllowlistPanel extends HTMLElement {
             ? `<button class="act deny" data-mac="${r.mac}" data-service="deny" ${d}>Deny</button>`
             : "";
           const forget = show.forget
-            ? `<button class="act" data-mac="${r.mac}" data-service="forget" ${d}>Forget</button>`
+            ? `<button class="act forget" data-mac="${r.mac}" data-service="forget" ${d}>Forget</button>`
             : "";
 
           return `

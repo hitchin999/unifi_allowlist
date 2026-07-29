@@ -507,8 +507,30 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def async_forget_mac(self, mac: str) -> None:
-        await self.store.async_forget(mac.strip().lower())
+        mac = mac.strip().lower()
+        await self.store.async_forget(mac)
+        # Pull any outstanding prompt for it off every phone.
+        await self.async_clear_notification(mac)
         await self.async_request_refresh()
+
+    async def async_forget_offline_pending(self) -> int:
+        """Clear waiting devices that are not on the wifi right now.
+
+        Randomised MAC addresses mean one phone can leave a trail of dead
+        entries in the queue. These are gone; forgetting them is not a
+        decision about the device, just housekeeping. If it comes back it
+        will be treated as new again.
+        """
+        live = {r["mac"] for r in self.online if r.get("live")}
+        macs = [m for m in list(self.store.pending) if m not in live]
+        if not macs:
+            return 0
+        gone = await self.store.async_forget_many(macs)
+        for mac in macs:
+            await self.async_clear_notification(mac)
+        await self.async_request_refresh()
+        _LOGGER.info("forgot %d offline waiting device(s)", gone)
+        return gone
 
     async def async_unblock_all(self) -> int:
         try:

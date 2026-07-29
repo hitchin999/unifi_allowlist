@@ -118,6 +118,19 @@ class DeviceStore:
         self.pending.pop(mac, None)
         await self.async_save()
 
+    async def async_forget_many(self, macs: list[str]) -> int:
+        """Drop several MACs from every list, writing storage only once."""
+        gone = 0
+        for mac in macs:
+            mac = _norm(mac)
+            hit = False
+            for bucket in (self.allowed, self.denied, self.pending):
+                hit = bucket.pop(mac, None) is not None or hit
+            gone += 1 if hit else 0
+        if gone:
+            await self.async_save()
+        return gone
+
     async def async_add_pending(
         self,
         mac: str,

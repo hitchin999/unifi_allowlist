@@ -30,6 +30,13 @@ forget:
       selector:
         text:
 
+forget_offline_pending:
+  name: Forget offline waiting devices
+  description: >-
+    Clear every device in the waiting queue that is not connected right now.
+    Useful when phones using randomised MAC addresses leave behind a trail of
+    dead entries. Devices still on the wifi are left alone.
+
 resend_pending:
   name: Resend pending
   description: Send a fresh notification for every device still waiting on an answer.

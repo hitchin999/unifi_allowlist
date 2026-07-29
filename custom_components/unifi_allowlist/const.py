@@ -47,6 +47,7 @@ SERVICE_IMPORT_LIST = "import_list"
 SERVICE_EXPORT_LIST = "export_list"
 SERVICE_SET_NAME = "set_name"
 SERVICE_ALLOW_ONLINE = "allow_online_unknown"
+SERVICE_FORGET_OFFLINE = "forget_offline_pending"
 
 ATTR_MAC = "mac"
 ATTR_DAYS = "days"
