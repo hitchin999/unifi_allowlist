@@ -192,8 +192,14 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
     @property
     def _multi_site(self) -> bool:
-        """True when more than one config entry is loaded."""
-        return len(self.hass.data.get(DOMAIN, {})) > 1
+        """True when more than one site is set up.
+
+        Counts configured entries rather than loaded ones: during a restart the
+        second entry may not have finished setting up, and a prompt sent in that
+        window would otherwise arrive without the site name - exactly the one
+        you most want labelled.
+        """
+        return len(self.hass.config_entries.async_entries(DOMAIN)) > 1
 
     # --- options helpers ---------------------------------------------------
 

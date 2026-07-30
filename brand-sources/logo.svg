@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" width="720" height="240">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A84FF"/>
+      <stop offset="1" stop-color="#0052CC"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(32.0 32.0) scale(0.6875)">
+    <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+    
+  <mask id="cut">
+    <rect width="256" height="256" fill="white"/>
+    <g fill="black" stroke="black" stroke-width="7" stroke-linejoin="round">
+      <path d="M 115 166 V 152 a 13 13 0 0 1 26 0 V 166" fill="none" stroke-linecap="round"/>
+      <rect x="102" y="166" width="52" height="40" rx="10"/>
+    </g>
+  </mask>
+  <g mask="url(#cut)" fill="none" stroke="#FFFFFF" stroke-width="15.0"
+     stroke-linecap="round"><path d="M 54.46 96.29 A 96.0 96.0 0 0 1 201.54 96.29"/><path d="M 75.91 114.29 A 68.0 68.0 0 0 1 180.09 114.29"/><path d="M 97.36 132.29 A 40.0 40.0 0 0 1 158.64 132.29"/></g>
+  <path d="M 115 166 V 152 a 13 13 0 0 1 26 0 V 166" fill="none" stroke="#FFFFFF" stroke-width="11"
+        stroke-linecap="round"/>
+  <g fill="#FFFFFF"><rect x="102" y="166" width="52" height="40" rx="10"/></g>
+
+  </g>
+  <text x="242.0" y="143" fill="#0B1B33"
+        font-family="Poppins" font-weight="600" font-size="58"
+        letter-spacing="-1">UniFi Allow List</text>
+</svg>

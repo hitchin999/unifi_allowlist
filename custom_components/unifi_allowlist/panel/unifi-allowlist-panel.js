@@ -569,6 +569,8 @@ const STYLES = `
   .name:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 2px; }
 
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  /* Same mark as the brand PNGs: lock under the arcs, never across them. */
+  .brand-ico .mark { width: 68%; height: 68%; display: block; color: inherit; }
 
   /* ---- filter button + sheet ---- */
   .filter-btn {
@@ -1416,7 +1418,7 @@ class UnifiAllowlistPanel extends HTMLElement {
             <ha-icon icon="mdi:menu"></ha-icon>
           </button>
           <div class="brand">
-            <div class="brand-ico"><ha-icon icon="mdi:wifi-lock"></ha-icon></div>
+            <div class="brand-ico"><svg class="mark" viewBox="0 0 256 256" aria-hidden="true"><mask id="ualcut"><rect width="256" height="256" fill="white"/><g fill="black" stroke="black" stroke-width="7" stroke-linejoin="round"><path d="M 115 166 V 152 a 13 13 0 0 1 26 0 V 166" fill="none" stroke-linecap="round"/><rect x="102" y="166" width="52" height="40" rx="10"/></g></mask><g mask="url(#ualcut)" fill="none" stroke="currentColor" stroke-width="15.0" stroke-linecap="round"><path d="M 54.5 96.3 A 96.0 96.0 0 0 1 201.5 96.3"/><path d="M 75.9 114.3 A 68.0 68.0 0 0 1 180.1 114.3"/><path d="M 97.4 132.3 A 40.0 40.0 0 0 1 158.6 132.3"/></g><path d="M 115 166 V 152 a 13 13 0 0 1 26 0 V 166" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/><g fill="currentColor"><rect x="102" y="166" width="52" height="40" rx="10"/></g></svg></div>
             <div class="brand-txt">
               <h1 id="title">WiFi Access</h1>
               <div class="sub" id="sub"></div>
