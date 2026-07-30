@@ -289,8 +289,15 @@ const STYLES = `
   .site-btn .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .site-btn .badge {
     flex: 0 0 auto;
-    background: var(--ua-warn-bg); color: var(--ua-warn);
-    border-radius: 999px; font-size: 11px; font-weight: 800; padding: 1px 7px;
+    display: inline-flex; align-items: center; gap: 2px;
+    /* Outlined, not filled, because this counts the sites you are NOT looking
+       at. The filled pills in the dropdown belong to a specific site. */
+    background: transparent; color: var(--ua-warn);
+    border: 1px solid var(--ua-warn);
+    border-radius: 999px; font-size: 11px; font-weight: 800; padding: 0 6px;
+  }
+  .site-btn .badge ha-icon {
+    --mdc-icon-size: 12px; width: 12px; height: 12px;
   }
   .sitepick.open .caret { transform: rotate(180deg); }
   .caret { transition: transform .18s ease; }
@@ -1793,9 +1800,14 @@ class UnifiAllowlistPanel extends HTMLElement {
     const otherWaiting = sites
       .filter((s) => s.entry_id !== current)
       .reduce((n, s) => n + (s.pending || 0), 0);
-    badge.textContent = String(otherWaiting);
+    const elsewhere = `${otherWaiting} waiting on ${
+      sites.length > 2 ? "other sites" : "the other site"
+    }`;
+    badge.innerHTML =
+      `<ha-icon icon="mdi:arrow-right-top"></ha-icon>${otherWaiting}`;
     badge.hidden = !otherWaiting;
-    badge.title = `${otherWaiting} waiting on other sites`;
+    badge.title = elsewhere;
+    badge.setAttribute("aria-label", elsewhere);
 
     const btn = root.getElementById("site-btn");
     btn.setAttribute("aria-expanded", String(this._siteOpen));
