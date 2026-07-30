@@ -46,6 +46,9 @@ DEFAULT_MIN_LIST_GUARD = 0
 DROP_GUARD_RATIO = 0.4
 # Below this, a list is too small for a ratio to mean anything.
 DROP_GUARD_FLOOR = 4
+# Ceiling on the in-memory last-seen map before the oldest entries are dropped.
+LAST_SEEN_CAP = 6000
+LAST_SEEN_KEEP = 4000
 DEFAULT_NOTIFY_GAP = 1.0
 DEFAULT_CHANNEL = "UniFi Allow List"
 DEFAULT_GROUP = "unifi_allowlist"

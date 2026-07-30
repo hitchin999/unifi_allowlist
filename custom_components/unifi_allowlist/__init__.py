@@ -450,6 +450,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
             r["mac"]: r["hostname"] for r in coord.online if r.get("hostname")
         }
         live_aps = {r["mac"]: r["ap"] for r in coord.online if r.get("ap")}
+        seen_at = coord.last_seen
 
         return self.json(
             {
@@ -466,6 +467,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "band": (info or {}).get("band", ""),
                         "ssid": (info or {}).get("ssid", ""),
                         "first_seen": (info or {}).get("first_seen"),
+                        "last_seen": seen_at.get(mac, 0),
                         "live": mac in live_macs,
                     }
                     for mac, info in store.pending.items()
@@ -477,6 +479,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "label": store.label_for(mac),
                         "ip": live_ips.get(mac, ""),
                         "ap": live_aps.get(mac, ""),
+                        "last_seen": seen_at.get(mac, 0),
                     }
                     for mac, info in store.allowed.items()
                 ],
@@ -490,6 +493,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "label": store.label_for(mac),
                         "ip": live_ips.get(mac, ""),
                         "ap": live_aps.get(mac, ""),
+                        "last_seen": seen_at.get(mac, 0),
                         "review": False,
                     }
                     for mac, info in store.denied.items()
@@ -501,6 +505,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "label": store.label_for(mac),
                         "ip": (info or {}).get("ip") or live_ips.get(mac, ""),
                         "ap": (info or {}).get("ap") or live_aps.get(mac, ""),
+                        "last_seen": seen_at.get(mac, 0),
                         "review": True,
                     }
                     for mac, info in store.pending.items()

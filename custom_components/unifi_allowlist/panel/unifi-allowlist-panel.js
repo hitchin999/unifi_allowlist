@@ -1852,6 +1852,7 @@ class UnifiAllowlistPanel extends HTMLElement {
           r.band ? { v: r.band, cls: "net", icon: "mdi:access-point" } : null,
           r.ssid ? { v: r.ssid, cls: "net", icon: "mdi:wifi" } : null,
           r.in_scope ? null : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
+          r.live ? null : UnifiAllowlistPanel._lastSeenChip(r.last_seen),
         ],
         fields: [
           { v: r.mac, mono: true, icon: "mdi:identifier" },
@@ -1879,6 +1880,7 @@ class UnifiAllowlistPanel extends HTMLElement {
           p.live
             ? { v: "still connected", cls: "unknown", icon: "mdi:lan-connect" }
             : { v: "gone offline", cls: "off", icon: "mdi:lan-disconnect" },
+          p.live ? null : UnifiAllowlistPanel._lastSeenChip(p.last_seen),
         ],
         fields: [
           { v: p.mac, mono: true, icon: "mdi:identifier" },
@@ -1906,6 +1908,9 @@ class UnifiAllowlistPanel extends HTMLElement {
         liveMacs.has(e.mac)
           ? { v: "on wifi now", cls: "net", icon: "mdi:wifi" }
           : { v: "not connected", cls: "off", icon: "mdi:wifi-off" },
+        liveMacs.has(e.mac)
+          ? null
+          : UnifiAllowlistPanel._lastSeenChip(e.last_seen),
       ],
       fields: [
         { v: e.mac, mono: true, icon: "mdi:identifier" },
@@ -2111,6 +2116,38 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (dbm >= -65) return "mdi:wifi-strength-3";
     if (dbm >= -72) return "mdi:wifi-strength-2";
     return "mdi:wifi-strength-1";
+  }
+
+  /* Epoch seconds -> "3h ago". Falls back to a date past a week, because
+     "just under 400 hours ago" tells you nothing useful. */
+  static _ago(stamp) {
+    const ts = Number(stamp) || 0;
+    if (!ts) return "";
+    const secs = Math.floor(Date.now() / 1000) - ts;
+    if (secs < 0) return "just now";
+    if (secs < 90) return "just now";
+    const mins = Math.round(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(secs / 3600);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(secs / 86400);
+    if (days <= 7) return `${days}d ago`;
+    try {
+      const then = new Date(ts * 1000);
+      const opts = { day: "numeric", month: "short" };
+      // A bare "May 13" on a two-year-old record reads as this year.
+      if (then.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+      return then.toLocaleDateString(undefined, opts);
+    } catch (err) {
+      return `${days}d ago`;
+    }
+  }
+
+  static _lastSeenChip(stamp) {
+    const ago = UnifiAllowlistPanel._ago(stamp);
+    return ago
+      ? { v: `last seen ${ago}`, cls: "off", icon: "mdi:clock-outline" }
+      : null;
   }
 
   static _siteName(s) {

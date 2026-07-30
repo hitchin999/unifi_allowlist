@@ -31,6 +31,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SSIDS,
     DEFAULT_ADOPT_BLOCKS,
+    LAST_SEEN_CAP,
+    LAST_SEEN_KEEP,
     DEFAULT_DENY_UNNAMED,
     DEFAULT_FORGET_IN_UNIFI,
     DEFAULT_BLOCK_FIRST,
@@ -87,6 +89,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self.wlan_names: dict[str, str] = {}
         self.ap_names: dict[str, str] = {}
         self.wireless_aps: dict[str, str] = {}
+        # Newest last_seen per MAC, so a device that drops off the controller's
+        # lookback window still shows when it was last around.
+        self.last_seen: dict[str, int] = {}
         self._devices_stamp = 0.0
         self.online: list[dict] = []
         self._breaker_tripped = False
@@ -287,6 +292,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if self._controller_name is None:
             await self._refresh_controller_name()
 
+        self._trim_last_seen()
         await self._auto_sync()
         await self._flush_notify_backlog()
 
@@ -310,7 +316,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             mac = str(rec.get("mac", "")).lower()
             if not mac:
                 continue
-            if int(rec.get("last_seen") or 0) < cutoff:
+            stamp = int(rec.get("last_seen") or 0)
+            if stamp and stamp > self.last_seen.get(mac, 0):
+                self.last_seen[mac] = stamp
+            if stamp < cutoff:
                 continue
             seen[mac] = dict(rec)
 
@@ -440,6 +449,25 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return True
         return self._ssid_of(rec) in scope
 
+    def _trim_last_seen(self) -> None:
+        """Keep the map from growing forever on a site full of random MACs."""
+        if len(self.last_seen) <= LAST_SEEN_CAP:
+            return
+        keep = sorted(self.last_seen.items(), key=lambda kv: kv[1], reverse=True)
+        self.last_seen = dict(keep[:LAST_SEEN_KEEP])
+        _LOGGER.debug("trimmed last-seen map to %d entries", len(self.last_seen))
+
+    def _last_seen_of(self, mac: str, rec: dict, is_live: bool) -> int:
+        """Epoch seconds this MAC was last on the wifi, 0 if never recorded."""
+        if is_live:
+            stamp = int(time.time())
+            self.last_seen[mac] = stamp
+            return stamp
+        stamp = int(rec.get("last_seen") or 0)
+        if stamp and stamp > self.last_seen.get(mac, 0):
+            self.last_seen[mac] = stamp
+        return self.last_seen.get(mac, 0)
+
     def _describe(self, rec: dict, is_live: bool) -> dict:
         mac = str(rec.get("mac", "")).lower()
         if self.store.is_allowed(mac):
@@ -464,6 +492,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             "band": self._band_of(rec),
             "blocked": bool(rec.get("blocked")),
             "live": is_live,
+            "last_seen": self._last_seen_of(mac, rec, is_live),
             "in_scope": self._in_scope(rec),
             "status": status,
         }
