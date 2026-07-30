@@ -584,10 +584,18 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             rec = seen[mac]
 
             if rule := self._denied_by_name(rec):
-                # Blocked, but no queue entry and no notification. A phone with
-                # MAC randomisation would otherwise prompt again on every new
-                # address it invents.
+                # Blocked with no queue entry and no notification: a phone with
+                # MAC randomisation would otherwise prompt on every new address
+                # it invents. It is still written to the denied list, because a
+                # blocked device that appears in none of our lists is exactly
+                # what the sync treats as somebody else's block - it would be
+                # adopted, and announced, on every single poll.
                 await self._safe_block(mac)
+                await self.store.async_deny(
+                    mac,
+                    name=rec.get("hostname") or rec.get("name") or "",
+                    ssid=self._ssid_of(rec),
+                )
                 suppressed += 1
                 _LOGGER.debug("suppressed %s by name rule %r", mac, rule)
                 continue
@@ -978,9 +986,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if adopt:
             await self.store.async_deny_many(adopt, source="unifi")
             _LOGGER.warning(
-                "sync: adopted %d block(s) from UniFi, %d of which were allowed "
-                "here and had stayed blocked for %d consecutive polls",
+                "sync: adopted %d block(s) from UniFi (%s), %d of which were "
+                "allowed here and had stayed blocked for %d consecutive polls",
                 len(adopt),
+                ", ".join(adopt[:10]) + ("..." if len(adopt) > 10 else ""),
                 len(persistent),
                 ADOPT_ALLOWED_AFTER,
             )
@@ -993,6 +1002,12 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if adopt or restore or (reblock and drifted):
             if refresh:
                 await self.async_request_refresh()
+
+        # Adopting a block somebody else made is routine housekeeping and does
+        # not need a push every time. Anything that touched the allow list, or
+        # put a block back, is worth interrupting for.
+        notable = bool(restore) or bool(persistent) or bool(reblock and drifted)
+        if notable:
             await self._notify_plain(
                 "Wifi access",
                 f"Synced with UniFi: {len(adopt)} newly denied, "

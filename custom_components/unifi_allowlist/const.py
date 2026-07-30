@@ -51,7 +51,7 @@ LAST_SEEN_CAP = 6000
 LAST_SEEN_KEEP = 4000
 DEFAULT_NOTIFY_GAP = 1.0
 DEFAULT_CHANNEL = "UniFi Allow List"
-DEFAULT_GROUP = "unifi_allowlist"
+DEFAULT_GROUP = "UniFi Allowlist"
 
 PANEL_URL_PATH = "wifi-access"
 PANEL_TITLE = "Wifi Access"

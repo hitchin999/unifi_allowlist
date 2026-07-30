@@ -160,6 +160,16 @@ Light and dark variants are included. Note that the HACS dashboard does not yet 
 
 MIT
 
+## Sorting and filtering
+
+Every tab has a toolbar above the list: sort by name, last seen, IP, access
+point or MAC, and filter by connection state, network, access point or band.
+The options offered are built from the rows actually in front of you, so a
+filter can never produce a guaranteed-empty list, and a count of what is hidden
+sits on the right. Choices persist across visits.
+
+IP sorting is numeric, so `192.168.0.9` comes before `192.168.0.100`.
+
 ## Silencing a phone that rotates its MAC
 
 A phone with private Wi-Fi addresses on arrives as a brand new device every

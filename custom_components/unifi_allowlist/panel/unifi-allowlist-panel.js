@@ -567,6 +567,25 @@ const STYLES = `
   .name:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 2px; }
 
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+
+  .tools {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin: 0 0 10px;
+  }
+  .tools select {
+    font: inherit; font-size: 13px; padding: 6px 10px;
+    border-radius: 10px; border: 1px solid var(--ua-line);
+    background: var(--ua-card); color: var(--ua-text);
+    max-width: 46vw;
+  }
+  .tools select:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 1px; }
+  .tools .spacer { flex: 1 1 auto; }
+  .tools .count { font-size: 12px; color: var(--ua-dim); }
+  .tools button.clear {
+    font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer;
+    border-radius: 10px; border: 1px solid var(--ua-line);
+    background: transparent; color: var(--ua-dim);
+  }
   .chip {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 2px 8px; border-radius: 999px;
@@ -1031,6 +1050,35 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._render();
   }
 
+  _loadPrefs() {
+    if (this._sort !== undefined) return;
+    this._sort = "name";
+    this._filters = {};
+    try {
+      const raw = window.localStorage.getItem("ual_view");
+      if (raw) {
+        const saved = JSON.parse(raw) || {};
+        if (typeof saved.sort === "string") this._sort = saved.sort;
+        if (saved.filters && typeof saved.filters === "object") {
+          this._filters = saved.filters;
+        }
+      }
+    } catch (err) {
+      /* storage unavailable, defaults are fine */
+    }
+  }
+
+  _savePrefs() {
+    try {
+      window.localStorage.setItem(
+        "ual_view",
+        JSON.stringify({ sort: this._sort, filters: this._filters })
+      );
+    } catch (err) {
+      /* nothing to do */
+    }
+  }
+
   set narrow(value) {
     this._narrow = Boolean(value);
     this.toggleAttribute("narrow", this._narrow);
@@ -1045,6 +1093,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._hass = hass;
     this._syncTheme();
     if (first) {
+      this._loadPrefs();
       this._build();
       this._load();
     }
@@ -1834,6 +1883,121 @@ class UnifiAllowlistPanel extends HTMLElement {
       .join("");
   }
 
+  /* ---- sorting and filtering ---- */
+
+  _sortKey() {
+    return this._sort || "name";
+  }
+
+  _sortRows(rows) {
+    const key = this._sortKey();
+    const byName = (a, b) =>
+      (a.name || "\uffff").localeCompare(b.name || "\uffff", undefined, {
+        sensitivity: "base",
+      });
+    const copy = rows.slice();
+    if (key === "seen") {
+      // Most recently around first; never-seen sinks to the bottom.
+      copy.sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0) || byName(a, b));
+    } else if (key === "ip") {
+      copy.sort((a, b) => UnifiAllowlistPanel._ipKey(a.ip) - UnifiAllowlistPanel._ipKey(b.ip) || byName(a, b));
+    } else if (key === "ap") {
+      copy.sort(
+        (a, b) => (a.ap || "\uffff").localeCompare(b.ap || "\uffff") || byName(a, b)
+      );
+    } else if (key === "mac") {
+      copy.sort((a, b) => (a.mac || "").localeCompare(b.mac || ""));
+    } else {
+      copy.sort(byName);
+    }
+    return copy;
+  }
+
+  /* Sorts 192.168.0.9 before 192.168.0.10, which a string sort does not. */
+  static _ipKey(ip) {
+    const parts = String(ip || "").split(".");
+    if (parts.length !== 4) return Number.MAX_SAFE_INTEGER;
+    let n = 0;
+    for (const p of parts) {
+      const v = Number(p);
+      if (!Number.isInteger(v) || v < 0 || v > 255) return Number.MAX_SAFE_INTEGER;
+      n = n * 256 + v;
+    }
+    return n;
+  }
+
+  _applyFilters(rows) {
+    const f = this._filters || {};
+    return rows.filter((r) => {
+      if (f.conn === "on" && !r.live) return false;
+      if (f.conn === "off" && r.live) return false;
+      if (f.ssid && r.ssid !== f.ssid) return false;
+      if (f.ap && r.ap !== f.ap) return false;
+      if (f.band && r.band !== f.band) return false;
+      return true;
+    });
+  }
+
+  _filtersActive() {
+    const f = this._filters || {};
+    return Boolean(f.conn || f.ssid || f.ap || f.band);
+  }
+
+  _toolsHtml(shown, total, all) {
+    const f = this._filters || {};
+    const uniq = (key) =>
+      Array.from(new Set((all || []).map((r) => r[key]).filter(Boolean))).sort();
+    const opt = (v, label, cur) =>
+      `<option value="${this._esc(v)}"${v === (cur || "") ? " selected" : ""}>${this._esc(label)}</option>`;
+
+    const ssids = uniq("ssid");
+    const aps = uniq("ap");
+    const bands = uniq("band");
+    const hidden = total - shown;
+
+    return `<div class="tools">
+      <select id="sortby" aria-label="Sort by">
+        ${opt("name", "Sort: name", this._sortKey())}
+        ${opt("seen", "Sort: last seen", this._sortKey())}
+        ${opt("ip", "Sort: IP", this._sortKey())}
+        ${opt("ap", "Sort: access point", this._sortKey())}
+        ${opt("mac", "Sort: MAC", this._sortKey())}
+      </select>
+      <select id="fconn" aria-label="Connection filter">
+        ${opt("", "Any state", f.conn)}
+        ${opt("on", "On wifi now", f.conn)}
+        ${opt("off", "Not connected", f.conn)}
+      </select>
+      ${
+        ssids.length > 1
+          ? `<select id="fssid" aria-label="Network filter">
+               ${opt("", "Any network", f.ssid)}
+               ${ssids.map((v) => opt(v, v, f.ssid)).join("")}
+             </select>`
+          : ""
+      }
+      ${
+        aps.length > 1
+          ? `<select id="fap" aria-label="Access point filter">
+               ${opt("", "Any access point", f.ap)}
+               ${aps.map((v) => opt(v, v, f.ap)).join("")}
+             </select>`
+          : ""
+      }
+      ${
+        bands.length > 1
+          ? `<select id="fband" aria-label="Band filter">
+               ${opt("", "Any band", f.band)}
+               ${bands.map((v) => opt(v, v, f.band)).join("")}
+             </select>`
+          : ""
+      }
+      <span class="spacer"></span>
+      ${hidden > 0 ? `<span class="count">${hidden} hidden</span>` : ""}
+      ${this._filtersActive() ? `<button class="clear" id="clearf">Clear filters</button>` : ""}
+    </div>`;
+  }
+
   /* ---- rows ---- */
 
   _rowsForTab() {
@@ -1846,6 +2010,10 @@ class UnifiAllowlistPanel extends HTMLElement {
         name: r.name,
         label: r.label,
         ip: r.ip,
+        ap: r.ap || "",
+        ssid: r.ssid || "",
+        band: r.band || "",
+        last_seen: r.last_seen || 0,
         live: r.live,
         status: r.live ? r.status : "off",
         chips: [
@@ -1872,6 +2040,10 @@ class UnifiAllowlistPanel extends HTMLElement {
         name: p.name,
         label: p.label,
         ip: p.ip,
+        ap: p.ap || "",
+        ssid: p.ssid || "",
+        band: p.band || "",
+        last_seen: p.last_seen || 0,
         live: p.live,
         status: "unknown",
         chips: [
@@ -1899,6 +2071,10 @@ class UnifiAllowlistPanel extends HTMLElement {
       name: e.name,
       label: e.label,
       ip: e.ip,
+      ap: e.ap || "",
+      ssid: "",
+      band: "",
+      last_seen: e.last_seen || 0,
       live: liveMacs.has(e.mac),
       review: e.review === true,
       status: liveMacs.has(e.mac) ? state : "off",
@@ -1949,6 +2125,11 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (this._animating) return;
     const list = this.shadowRoot.getElementById("list");
     let rows = this._rowsForTab();
+    const allRows = rows;
+    const total = rows.length;
+
+    rows = this._applyFilters(rows);
+    rows = this._sortRows(rows);
 
     if (this._query) {
       const q = this._query;
@@ -1963,6 +2144,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     if (!rows.length) {
       list.innerHTML =
+        this._toolsHtml(0, total, allRows) +
         `<div class="empty"><ha-icon icon="${this._emptyIcon()}"></ha-icon>` +
         `<span>${this._esc(this._emptyText())}</span></div>`;
       return;
@@ -1971,6 +2153,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     const shown = rows.slice(0, MAX_ROWS);
 
     list.innerHTML =
+      this._toolsHtml(rows.length, total, allRows) +
       this._bulkHtml(rows) +
       shown.map((r) => this._rowHtml(r)).join("") +
       (rows.length > MAX_ROWS
