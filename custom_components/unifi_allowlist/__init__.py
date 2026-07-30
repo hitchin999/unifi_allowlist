@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 
 import voluptuous as vol
@@ -33,6 +34,7 @@ from .const import (
     CONF_VERIFY_SSL,
     DOMAIN,
     EVENT_ACTION,
+    PANEL_ASSET,
     PANEL_ICON,
     PANEL_TITLE,
     PANEL_URL_PATH,
@@ -56,6 +58,7 @@ from .const import (
     STATIC_URL,
 )
 from .coordinator import UnifiAllowlistCoordinator
+from . import sms as sms_bridge
 from .store import DeviceStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -124,6 +127,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await _async_register_frontend(hass)
+    sms_bridge.async_register(hass)
     _async_register_services(hass)
     _async_register_action_listener(hass, entry)
 
@@ -145,10 +149,25 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unloaded:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not hass.data[DOMAIN]:
+            sms_bridge.async_unregister(hass)
             if hass.data.pop(f"{DOMAIN}_panel", False):
                 frontend.async_remove_panel(hass, PANEL_URL_PATH)
             hass.data.pop(DOMAIN, None)
     return unloaded
+
+
+async def _async_asset_hash(hass: HomeAssistant) -> str:
+    """Short digest of the panel bundle, used to version its URL."""
+
+    def _read() -> str:
+        path = os.path.join(os.path.dirname(__file__), "panel", PANEL_ASSET)
+        try:
+            with open(path, "rb") as fh:
+                return hashlib.sha1(fh.read()).hexdigest()[:10]
+        except OSError:
+            return "0"
+
+    return await hass.async_add_executor_job(_read)
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
@@ -182,6 +201,12 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     except Exception:  # noqa: BLE001
         version = "dev"
 
+    # The version alone is not enough. Editing the panel without bumping the
+    # manifest leaves the URL identical, and a cached copy sticks around - the
+    # Home Assistant app's webview is far more stubborn about this than a
+    # browser. Hashing the file means any change to it busts the cache.
+    version = f"{version}.{await _async_asset_hash(hass)}"
+
     try:
         frontend.async_register_built_in_panel(
             hass,
@@ -193,7 +218,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             config={
                 "_panel_custom": {
                     "name": "unifi-allowlist-panel",
-                    "module_url": f"{STATIC_URL}/unifi-allowlist-panel.js?v={version}",
+                    "module_url": f"{STATIC_URL}/{PANEL_ASSET}?v={version}",
                     "embed_iframe": False,
                     "trust_external": False,
                 }
@@ -244,6 +269,23 @@ def _coordinator_by_id(
     return None
 
 
+async def _actor(hass: HomeAssistant, call) -> str:
+    """Best name for whoever triggered this call.
+
+    A panel button or a Developer Tools call carries the logged-in user.
+    Automations, enforcement and the sync carry nothing, which the audit log
+    records as "automatic".
+    """
+    user_id = getattr(getattr(call, "context", None), "user_id", None)
+    if not user_id:
+        return ""
+    try:
+        user = await hass.auth.async_get_user(user_id)
+    except Exception:  # noqa: BLE001
+        return user_id
+    return (user.name if user and user.name else user_id) or user_id
+
+
 def _target(hass: HomeAssistant, call) -> UnifiAllowlistCoordinator | None:
     """Which site a service call is about.
 
@@ -281,15 +323,17 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def _allow(call):
         if coord := _target(hass, call):
-            await coord.async_allow(call.data[ATTR_MAC])
+            await coord.async_allow(call.data[ATTR_MAC], actor=await _actor(hass, call))
 
     async def _deny(call):
         if coord := _target(hass, call):
-            await coord.async_deny(call.data[ATTR_MAC])
+            await coord.async_deny(call.data[ATTR_MAC], actor=await _actor(hass, call))
 
     async def _forget(call):
         if coord := _target(hass, call):
-            await coord.async_forget_mac(call.data[ATTR_MAC])
+            await coord.async_forget_mac(
+                call.data[ATTR_MAC], actor=await _actor(hass, call)
+            )
 
     async def _resend(call):
         if coord := _target(hass, call):
@@ -405,10 +449,20 @@ def _async_register_action_listener(hass: HomeAssistant, entry: ConfigEntry) -> 
         if not coord:
             return
 
+        actor = ""
+        user_id = getattr(getattr(event, "context", None), "user_id", None)
+        if user_id:
+            try:
+                user = await hass.auth.async_get_user(user_id)
+                actor = (user.name if user else "") or ""
+            except Exception:  # noqa: BLE001
+                actor = ""
+        actor = f"notification {actor}".strip() if actor else "notification"
+
         if kind.upper() == "OK":
-            await coord.async_allow(mac)
+            await coord.async_allow(mac, actor=actor)
         else:
-            await coord.async_deny(mac)
+            await coord.async_deny(mac, actor=actor)
 
     entry.async_on_unload(hass.bus.async_listen(EVENT_ACTION, _handle))
 
@@ -525,8 +579,10 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "breaker": bool((coord.data or {}).get("breaker")),
                 "error": coord.last_error,
                 "guard_blocked": coord.guard_blocked,
+                "notify_broken": coord.notify_broken,
                 "drop_blocked": coord.drop_blocked,
                 "high_water": coord.store.high_water,
+                "audit": list(reversed(store.audit[-120:])),
                 "guard_min": coord.guard_min,
             }
         )

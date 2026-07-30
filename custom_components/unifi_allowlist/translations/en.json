@@ -45,14 +45,22 @@
           "adopt_blocks": "Adopt blocks made in UniFi",
           "deny_names": "Always block these device names",
           "deny_unnamed": "Always block devices that report no name",
-          "forget_in_unifi": "Also remove the client from UniFi when forgetting"
+          "forget_in_unifi": "Also remove the client from UniFi when forgetting",
+          "sms_numbers": "Text alerts to these numbers",
+          "sms_line": "Send SMS from this line (optional)",
+          "sms_pin": "PIN required on SMS replies (optional)",
+          "sms_digest": "Combine bursts into one text"
         },
         "data_description": {
           "adopt_blocks": "Each poll, move devices blocked in the UniFi UI into Denied, and re-apply blocks that were removed there. Off by default.",
           "deny_names": "One entry per name, case insensitive, * and ? wildcards allowed. Matching devices are blocked silently with no notification and no queue entry. Names are reported by the device and can be changed, so treat this as noise control rather than security.",
           "deny_unnamed": "Devices with no hostname at all. This catches a lot of legitimate hardware such as cameras and IoT gear, so check the waiting list before turning it on.",
           "forget_in_unifi": "Deletes the client record on the controller, the same as Forget in the UniFi UI - alias, fixed IP and history included, with no undo. Clients that have a name or a fixed IP set in UniFi are only unblocked instead, so nothing you configured there is destroyed.",
-          "min_list_guard": "An optional hard floor: below this many allowed devices, nothing is blocked at all. Off by default, because losing the stored list is caught separately and a fixed number suits a large site far better than a small one. Set it only if you want a belt-and-braces floor of your own."
+          "min_list_guard": "An optional hard floor: below this many allowed devices, nothing is blocked at all. Off by default, because losing the stored list is caught separately and a fixed number suits a large site far better than a small one. Set it only if you want a belt-and-braces floor of your own.",
+          "sms_numbers": "Needs the Telebroad SMS integration. Each waiting device is texted with a short id; reply '475 allow' or '475 keep'. Only these numbers are acted on, and only for this site.",
+          "sms_line": "Leave blank to use the first configured Telebroad line.",
+          "sms_pin": "Caller ID can be faked, so anyone who learns the line number and the id format could reply. With a PIN set, replies must read '475 allow 4321'. Blank means no PIN.",
+          "sms_digest": "One text listing several devices instead of one text each. Useful on a busy night; off means every device gets its own message."
         }
       }
     }

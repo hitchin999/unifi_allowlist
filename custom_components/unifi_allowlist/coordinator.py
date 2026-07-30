@@ -20,6 +20,10 @@ from .const import (
     CONF_ADOPT_BLOCKS,
     CONF_DENY_NAMES,
     CONF_DENY_UNNAMED,
+    CONF_SMS_DIGEST,
+    CONF_SMS_LINE,
+    CONF_SMS_NUMBERS,
+    CONF_SMS_PIN,
     CONF_BLOCK_FIRST,
     CONF_FORGET_IN_UNIFI,
     CONF_CHANNEL,
@@ -34,6 +38,11 @@ from .const import (
     LAST_SEEN_CAP,
     LAST_SEEN_KEEP,
     DEFAULT_DENY_UNNAMED,
+    DEFAULT_SMS_DIGEST,
+    EVENT_DECISION,
+    SMS_DOMAIN,
+    SMS_ENABLED,
+    SMS_SERVICE,
     DEFAULT_FORGET_IN_UNIFI,
     DEFAULT_BLOCK_FIRST,
     DEFAULT_CHANNEL,
@@ -53,6 +62,15 @@ from .const import (
 from .store import DeviceStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _only_digits(value: str) -> str:
+    """Compare phone numbers without caring about +, spaces or dashes."""
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _norm_mac(mac: str) -> str:
+    return str(mac or "").strip().lower()
 
 
 def _serves_wifi(dev: dict) -> bool:
@@ -102,7 +120,14 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._guard_logged = False
         self._drop_logged = False
         self._notify_backlog: set[str] = set()
+        self._notify_missing_since = 0.0
+        self._notify_missing_logged = False
         self._blocked_streak: dict[str, int] = {}
+        # The poll already pulls the full client list; keep it so a single
+        # Forget does not have to fetch a thousand records again before it can
+        # decide whether the client has an alias or a fixed IP.
+        self._known_cache: list[dict] = []
+        self._known_cache_at = 0.0
 
         super().__init__(
             hass,
@@ -127,7 +152,122 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         """What the user called this entry, e.g. 'Wifi Access (Camp X)'."""
         return self.entry.title or self.site or "UniFi"
 
+    # --- SMS bridge ---------------------------------------------------------
+
+    @property
+    def sms_numbers(self) -> list[str]:
+        if not SMS_ENABLED:
+            return []
+        raw = self._opt(CONF_SMS_NUMBERS, None) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        return [str(n).strip() for n in raw if str(n).strip()]
+
+    @property
+    def sms_line(self) -> str:
+        return str(self._opt(CONF_SMS_LINE, "") or "").strip()
+
+    @property
+    def sms_pin(self) -> str:
+        return str(self._opt(CONF_SMS_PIN, "") or "").strip()
+
+    @property
+    def sms_digest(self) -> bool:
+        return bool(self._opt(CONF_SMS_DIGEST, DEFAULT_SMS_DIGEST))
+
+    def sms_authorised(self, number: str) -> bool:
+        """Whether this sender may act on this site.
+
+        Caller ID is spoofable, so this is a convenience filter rather than
+        security. Set a PIN in the options if the line is ever abused.
+        """
+        digits = _only_digits(number)
+        if not digits:
+            return False
+        return any(_only_digits(n) == digits for n in self.sms_numbers)
+
+    async def async_send_sms(self, text: str, to: list[str] | None = None) -> None:
+        targets = to if to is not None else self.sms_numbers
+        targets = [t for t in targets if t]
+        if not targets:
+            return
+        if not self.hass.services.has_service(SMS_DOMAIN, SMS_SERVICE):
+            _LOGGER.warning(
+                "SMS requested but %s.%s is not available", SMS_DOMAIN, SMS_SERVICE
+            )
+            return
+        data = {"receiver": ",".join(targets), "message": text}
+        if self.sms_line:
+            data["sms_line"] = self.sms_line
+        try:
+            await self.hass.services.async_call(
+                SMS_DOMAIN, SMS_SERVICE, data, blocking=False
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("sending SMS failed: %s", err)
+
+    def _ids_in_use_elsewhere(self) -> set[str]:
+        """Ids live on other sites, so a bare number is never ambiguous."""
+        taken: set[str] = set()
+        for data in (self.hass.data.get(DOMAIN) or {}).values():
+            coord = data.get("coordinator")
+            if coord is None or coord is self:
+                continue
+            taken |= set(coord.store.ids)
+        return taken
+
+    async def async_sms_prompt(self, mac: str, name: str, rec: dict) -> None:
+        """Text the waiting device out with a handle to reply to."""
+        if not self.sms_numbers:
+            return
+        sms_id = await self.store.async_claim_id(mac, self._ids_in_use_elsewhere())
+        if not sms_id:
+            _LOGGER.error("ran out of SMS ids; not texting %s", mac)
+            return
+        blocked = bool(self._opt(CONF_BLOCK_FIRST, DEFAULT_BLOCK_FIRST))
+        lines = [
+            f"ID #{sms_id}: {name or 'a device with no name'} "
+            f"has been {'blocked' if blocked else 'seen'}!",
+            _norm_mac(mac),
+        ]
+        where = ", ".join(
+            x for x in (self._ssid_of(rec), rec.get("band") or "", self._ap_of(rec)) if x
+        )
+        if where:
+            lines.append(where)
+        if self._multi_site:
+            lines.append(self.site_label)
+        pin = " <pin>" if self.sms_pin else ""
+        lines.append(f"Reply: {sms_id} allow{pin}  or  {sms_id} block{pin}")
+        await self.async_send_sms("\n".join(lines))
+
+    # --- audit --------------------------------------------------------------
+
+    async def async_record(
+        self, action: str, mac: str, name: str = "", actor: str = ""
+    ) -> None:
+        """Write one line of history and fire it on the bus."""
+        entry = {
+            "ts": int(time.time()),
+            "action": action,
+            "mac": _norm_mac(mac),
+            "name": name or self.store.name_for(mac) or "",
+            "actor": actor or "automatic",
+            "site": self.site_label,
+        }
+        await self.store.async_log(entry)
+        self.hass.bus.async_fire(EVENT_DECISION, dict(entry, entry_id=self.entry_id))
+
     # --- name based suppression -------------------------------------------
+
+    @property
+    def notify_broken(self) -> list[str]:
+        """Targets that are missing beyond the startup grace period."""
+        if not self._notify_missing_since:
+            return []
+        if time.time() - self._notify_missing_since <= self.NOTIFY_GRACE:
+            return []
+        return self._missing_targets()
 
     @property
     def guard_min(self) -> int:
@@ -226,17 +366,49 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         targets = self.notify_targets
         return targets[0] if targets else None
 
-    def _missing_targets(self) -> list[str]:
-        """Configured notify services Home Assistant has not registered yet.
+    # Long enough for mobile_app to finish registering after a restart, short
+    # enough that a genuinely wrong target does not stay quiet for an evening.
+    NOTIFY_GRACE = 180.0
 
-        After a restart the mobile_app integration can come up later than this
-        one, so a prompt sent in that window is thrown away by the bus.
-        """
+    def _missing_targets(self) -> list[str]:
+        """Configured notify services Home Assistant has not registered."""
         return [
             t
             for t in self.notify_targets
             if not self.hass.services.has_service("notify", t)
         ]
+
+    def _hold_for_notify(self) -> bool:
+        """Whether to queue a prompt instead of sending it.
+
+        Only worth holding just after a restart, when mobile_app may not have
+        registered yet. A target that is still missing after that is not a race,
+        it is a wrong name - and queueing it forever means no alerts at all with
+        nothing but a debug line to show for it. Send anyway so the failure is
+        visible, and say so loudly.
+        """
+        missing = self._missing_targets()
+        if not missing:
+            self._notify_missing_since = 0.0
+            self._notify_missing_logged = False
+            return False
+
+        now = time.time()
+        if not self._notify_missing_since:
+            self._notify_missing_since = now
+            return True
+        if now - self._notify_missing_since <= self.NOTIFY_GRACE:
+            return True
+
+        if not self._notify_missing_logged:
+            self._notify_missing_logged = True
+            _LOGGER.error(
+                "notify target(s) %s do not exist. Alerts are not being "
+                "delivered - check the notification target in the integration "
+                "options against Developer tools > Actions",
+                ", ".join(missing),
+            )
+        return False
 
     async def _flush_notify_backlog(self) -> None:
         """Re-send prompts that were lost because notify was not ready."""
@@ -294,6 +466,8 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(str(err)) from err
 
         self.last_error = None
+        self._known_cache = known or []
+        self._known_cache_at = time.time()
 
         if self._controller_name is None:
             await self._refresh_controller_name()
@@ -629,6 +803,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 ip=ip,
                 ap=ap,
             )
+            await self.async_sms_prompt(mac, name, rec)
             await asyncio.sleep(float(self._opt(CONF_NOTIFY_GAP, DEFAULT_NOTIFY_GAP)))
 
         self.suppressed_last_run = suppressed
@@ -683,8 +858,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if not self.notify_targets:
             return
 
-        if self._missing_targets():
-            # Hold it rather than firing into a bus that will drop it.
+        if self._hold_for_notify():
+            # Just after a restart. Hold it rather than firing into a bus that
+            # has not registered mobile_app yet; the backlog goes out shortly.
             self._notify_backlog.add(mac)
             _LOGGER.debug("notify not ready, queued prompt for %s", mac)
             return
@@ -749,22 +925,28 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
     # --- actions -----------------------------------------------------------
 
-    async def async_allow(self, mac: str) -> None:
+    async def async_allow(self, mac: str, actor: str = "") -> None:
         mac = mac.strip().lower()
         rec = self.store.pending.get(mac) or {}
-        await self.store.async_allow(mac, rec.get("name", ""), rec.get("ssid", ""))
+        name = rec.get("name", "")
+        await self.store.async_allow(mac, name, rec.get("ssid", ""))
         await self._safe_unblock(mac)
         await self.async_clear_notification(mac)
-        _LOGGER.info("allowed %s", mac)
+        await self.store.async_close_id(mac)
+        await self.async_record("allowed", mac, name, actor)
+        _LOGGER.info("allowed %s (%s)", mac, actor or "automatic")
         await self.async_request_refresh()
 
-    async def async_deny(self, mac: str) -> None:
+    async def async_deny(self, mac: str, actor: str = "") -> None:
         mac = mac.strip().lower()
         rec = self.store.pending.get(mac) or {}
-        await self.store.async_deny(mac, rec.get("name", ""), rec.get("ssid", ""))
+        name = rec.get("name", "")
+        await self.store.async_deny(mac, name, rec.get("ssid", ""))
         await self._safe_block(mac)
         await self.async_clear_notification(mac)
-        _LOGGER.info("denied %s", mac)
+        await self.store.async_close_id(mac)
+        await self.async_record("blocked", mac, name, actor)
+        _LOGGER.info("denied %s (%s)", mac, actor or "automatic")
         await self.async_request_refresh()
 
     async def async_allow_online_unknown(self) -> int:
@@ -788,6 +970,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.store.async_set_label(mac, name)
         await self.async_request_refresh()
 
+    async def _async_known_clients(self, max_age: float = 90.0) -> list[dict]:
+        """Client list, from the last poll when it is recent enough."""
+        if self._known_cache and time.time() - self._known_cache_at <= max_age:
+            return self._known_cache
+        known = await self.client.known_clients()
+        self._known_cache = known or []
+        self._known_cache_at = time.time()
+        return self._known_cache
+
     async def _async_remove_from_controller(self, macs: list[str]) -> dict:
         """Delete these clients from UniFi, the way Forget does in its UI.
 
@@ -802,7 +993,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return {"forgotten": 0, "unblocked": 0}
 
         try:
-            known = await self.client.known_clients()
+            known = await self._async_known_clients()
         except UnifiError as err:
             _LOGGER.warning("could not read clients before forgetting: %s", err)
             for mac in macs:
@@ -841,9 +1032,12 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             )
         return {"forgotten": len(doomed), "unblocked": len(protected)}
 
-    async def async_forget_mac(self, mac: str) -> None:
+    async def async_forget_mac(self, mac: str, actor: str = "") -> None:
         mac = mac.strip().lower()
+        name = self.store.name_for(mac)
         await self.store.async_forget(mac)
+        await self.store.async_close_id(mac)
+        await self.async_record("forgot", mac, name, actor)
         # "As if never seen" has to include the controller, or our lists and
         # UniFi drift apart and a later sync adopts it straight back.
         if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):

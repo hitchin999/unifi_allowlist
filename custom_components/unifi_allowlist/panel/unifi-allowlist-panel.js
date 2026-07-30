@@ -618,13 +618,25 @@ const STYLES = `
       left: auto; top: 0; bottom: 0; width: 380px; max-height: none;
       border-radius: 0; transform: translateX(101%);
     }
+    /* History carries a name, a MAC and who did it on one line, so it needs
+       noticeably more room than a list of filter checkboxes. */
+    #hist { width: min(620px, 46vw); }
   }
   .sheet-hd {
+    flex: 0 0 auto;
     display: flex; align-items: center; gap: 10px;
     padding: 14px 16px; border-bottom: 1px solid var(--ua-line);
   }
   .sheet-hd h2 { margin: 0; font-size: 17px; font-weight: 700; flex: 1 1 auto; }
-  .sheet-body { overflow: auto; padding: 8px 12px 16px; -webkit-overflow-scrolling: touch; }
+  /* flex: 1 with min-height: 0 is what lets this shrink and scroll. Without
+     the min-height a column flex child refuses to go below its content height,
+     so on a phone - where the sheet is capped at 82vh - a long filter list
+     pushed the footer, and the Reset button with it, off the bottom of the
+     screen. */
+  .sheet-body {
+    flex: 1 1 auto; min-height: 0;
+    overflow: auto; padding: 8px 12px 16px; -webkit-overflow-scrolling: touch;
+  }
   .sheet-sec { margin-top: 14px; }
   .sheet-sec:first-child { margin-top: 4px; }
   .sheet-sec > h3 {
@@ -650,9 +662,25 @@ const STYLES = `
   .opt[aria-checked="true"] .box ha-icon { color: #fff; --mdc-icon-size: 16px; width: 16px; height: 16px; }
   .opt[aria-checked="false"] .box ha-icon { display: none; }
   .opt.radio .box { border-radius: 50%; }
+  .logrow {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 11px 14px; border-top: 1px solid var(--ua-line); font-size: 14px;
+  }
+  .logrow:first-child { border-top: 0; }
+  .logrow .act { flex: 0 0 auto; font-weight: 700; }
+  .logrow .act.allowed { color: var(--ua-ok); }
+  .logrow .act.blocked { color: var(--ua-bad); }
+  .logrow .act.forgot  { color: var(--ua-dim); }
+  .logrow .who { flex: 1 1 auto; min-width: 0; overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+  .logrow .when { flex: 0 0 auto; color: var(--ua-dim); font-size: 12px; }
+  .logrow .mac { display: block; color: var(--ua-dim); font-size: 12px;
+                 font-family: ui-monospace, Menlo, Consolas, monospace; }
   .sheet-ft {
+    flex: 0 0 auto;
     display: flex; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--ua-line);
+    background: var(--ua-card);
   }
   .sheet-ft button {
     flex: 1 1 0; height: 44px; border-radius: var(--ua-r); cursor: pointer;
@@ -1290,25 +1318,66 @@ class UnifiAllowlistPanel extends HTMLElement {
     return release;
   }
 
+  /* The backend refresh is debounced and the panel polls on its own clock, so
+     without this the row it just acted on sits there, or leaves a gap, until
+     the next fetch lands. Drop it locally and let the fetch reconcile. */
+  _dropRowLocally(mac, service) {
+    const d = this._data;
+    if (!d || !mac) return;
+    const without = (list) => (list || []).filter((e) => e.mac !== mac);
+    if (service === "forget") {
+      d.pending = without(d.pending);
+      d.allowed = without(d.allowed);
+      d.denied = without(d.denied);
+    } else if (service === "allow") {
+      d.pending = without(d.pending);
+      d.denied = without(d.denied);
+    } else if (service === "deny") {
+      d.pending = without(d.pending);
+      d.allowed = without(d.allowed);
+    }
+    (d.online || []).forEach((r) => {
+      if (r.mac !== mac) return;
+      if (service === "allow") r.status = "allowed";
+      if (service === "deny") r.status = "denied";
+      if (service === "forget") r.status = "unknown";
+    });
+  }
+
   async _act(mac, service, btn) {
     if (this._busy[mac]) return;
     this._busy[mac] = true;
     const release = this._holdRender();
-    let ok = false;
+
+    // Two clocks, and they are nothing alike. The animation is a predictable
+    // ~760ms; the service call can take seconds when the controller is remote.
+    // Waiting for the call before redrawing left the finished animation on
+    // screen as a blank gap, so the row goes as soon as the animation ends and
+    // the call is reconciled afterwards.
+    const played = this._playAction(mac, service, btn);
+    const called = this._call(service, { mac });
+
     try {
-      // Play the confirmation in place while the call is in flight.
-      const played = this._playAction(mac, service, btn);
-      [ok] = await Promise.all([this._call(service, { mac }), played]);
+      await played;
     } finally {
-      delete this._busy[mac];
       release();
     }
-    if (ok) {
-      const word =
-        service === "allow" ? "Allowed" : service === "deny" ? "Blocked" : "Forgotten";
-      this._notify(`${word} ${mac}`, service === "deny" ? "err" : "ok");
-    }
+
+    this._dropRowLocally(mac, service);
+    const word =
+      service === "allow" ? "Allowed" : service === "deny" ? "Blocked" : "Forgotten";
+    this._notify(`${word} ${mac}`, service === "deny" ? "err" : "ok");
     this._render();
+
+    const ok = await called;
+    delete this._busy[mac];
+    if (!ok) {
+      // The optimistic removal was wrong - go and find out what is really there.
+      await this._load();
+      return;
+    }
+    window.clearTimeout(this._settleTimer);
+    this._settleTimer = window.setTimeout(() => this._load(), 1200);
   }
 
   /* Fills the pressed button with its verdict colour and draws the glyph: a
@@ -1456,6 +1525,10 @@ class UnifiAllowlistPanel extends HTMLElement {
               <ha-icon icon="mdi:close-circle"></ha-icon>
             </button>
           </div>
+          <button class="filter-btn" id="hist-btn" aria-haspopup="dialog"
+                  aria-label="History" title="History">
+            <ha-icon icon="mdi:history"></ha-icon>
+          </button>
           <button class="filter-btn" id="filter-btn" aria-haspopup="dialog"
                   aria-expanded="false" aria-label="Sort and filter">
             <ha-icon icon="mdi:tune-variant"></ha-icon>
@@ -1478,9 +1551,22 @@ class UnifiAllowlistPanel extends HTMLElement {
           </div>
           <div class="sheet-body" id="sheet-body"></div>
           <div class="sheet-ft">
-            <button id="sheet-clear">Clear all</button>
+            <button id="sheet-clear" hidden>Reset</button>
             <button class="primary" id="sheet-done">Done</button>
           </div>
+        </aside>
+
+        <div class="sheet-bd" id="hist-bd"></div>
+        <aside class="sheet" id="hist" role="dialog" aria-modal="true"
+               aria-label="History" hidden>
+          <div class="sheet-hd">
+            <ha-icon icon="mdi:history"></ha-icon>
+            <h2>History</h2>
+            <button class="icon-btn" id="hist-x" aria-label="Close">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="sheet-body" id="hist-body"></div>
         </aside>
 
         <div class="row-menu" id="row-menu"></div>
@@ -1497,6 +1583,14 @@ class UnifiAllowlistPanel extends HTMLElement {
       );
     });
 
+    root.getElementById("hist-btn").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._openHist(!this._histOpen);
+    });
+    root.getElementById("hist-bd").addEventListener("click", () => this._openHist(false));
+    root.getElementById("hist-x").addEventListener("click", () => this._openHist(false));
+    root.getElementById("hist").addEventListener("click", (ev) => ev.stopPropagation());
+
     root.getElementById("filter-btn").addEventListener("click", (ev) => {
       ev.stopPropagation();
       this._openSheet(!this._sheetOpen);
@@ -1506,6 +1600,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     root.getElementById("sheet-done").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-clear").addEventListener("click", () => {
       this._filters = { conn: [], ssid: [], ap: [], band: [] };
+      this._sort = "name";
       this._savePrefs();
       this._renderSheet();
       this._renderList();
@@ -1523,7 +1618,9 @@ class UnifiAllowlistPanel extends HTMLElement {
       this._renderList();
     });
     window.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && this._sheetOpen) this._openSheet(false);
+      if (ev.key !== "Escape") return;
+      if (this._sheetOpen) this._openSheet(false);
+      if (this._histOpen) this._openHist(false);
     });
 
     root.getElementById("refresh").addEventListener("click", (ev) => {
@@ -1813,6 +1910,13 @@ class UnifiAllowlistPanel extends HTMLElement {
       bannerHtml +=
         `<div class="banner err"><ha-icon icon="mdi:alert-circle-outline"></ha-icon>` +
         `<span>${this._esc(this._error)}</span></div>`;
+    }
+    if (d && (d.notify_broken || []).length) {
+      bannerHtml +=
+        `<div class="banner err"><ha-icon icon="mdi:bell-off-outline"></ha-icon>` +
+        `<span>No alerts are being delivered: notification target ` +
+        `<b>${this._esc(d.notify_broken.join(", "))}</b> does not exist. ` +
+        `Fix it in the integration options.</span></div>`;
     }
     if (d && d.drop_blocked) {
       bannerHtml +=
@@ -2201,6 +2305,61 @@ class UnifiAllowlistPanel extends HTMLElement {
       dot.textContent = String(n);
       dot.hidden = !n;
     }
+    // Nothing to reset means no button, rather than one that appears dead.
+    const reset = root.getElementById("sheet-clear");
+    if (reset) reset.hidden = !this._activeCount() && this._sortKey() === "name";
+  }
+
+  _openHist(open) {
+    const root = this.shadowRoot;
+    const sheet = root.getElementById("hist");
+    const bd = root.getElementById("hist-bd");
+    if (!sheet || !bd) return;
+    this._histOpen = Boolean(open);
+    if (this._histOpen) {
+      sheet.hidden = false;
+      this._renderHist();
+      window.requestAnimationFrame(() => {
+        sheet.classList.add("open");
+        bd.classList.add("open");
+      });
+    } else {
+      sheet.classList.remove("open");
+      bd.classList.remove("open");
+      window.setTimeout(() => {
+        if (!this._histOpen) sheet.hidden = true;
+      }, 240);
+    }
+  }
+
+  _renderHist() {
+    const body = this.shadowRoot.getElementById("hist-body");
+    if (!body) return;
+    const log = (this._data && this._data.audit) || [];
+    if (!log.length) {
+      body.innerHTML =
+        `<div class="empty"><ha-icon icon="mdi:history"></ha-icon>` +
+        `<span>Nothing decided yet on this site.</span></div>`;
+      return;
+    }
+    const word = { allowed: "Allowed", blocked: "Blocked", forgot: "Forgot" };
+    body.innerHTML =
+      `<div class="sheet-sec"><div class="sheet-group">` +
+      log
+        .map((e) => {
+          const act = this._esc(e.action || "");
+          return `<div class="logrow">
+            <span class="act ${act}">${this._esc(word[e.action] || e.action || "")}</span>
+            <span class="who">${this._esc(e.name || e.mac || "")}
+              <span class="mac">${this._esc(e.mac || "")} &middot; ${this._esc(
+                e.actor || "automatic"
+              )}</span>
+            </span>
+            <span class="when">${this._esc(UnifiAllowlistPanel._ago(e.ts))}</span>
+          </div>`;
+        })
+        .join("") +
+      `</div></div>`;
   }
 
   /* ---- rows ---- */
@@ -2354,6 +2513,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       dot.hidden = !active;
     }
     if (this._sheetOpen) this._renderSheet();
+    if (this._histOpen) this._renderHist();
 
     if (!rows.length) {
       list.innerHTML =

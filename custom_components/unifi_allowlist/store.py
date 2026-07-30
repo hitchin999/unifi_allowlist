@@ -15,8 +15,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    AUDIT_MAX,
     DROP_GUARD_FLOOR,
     DROP_GUARD_RATIO,
+    SMS_ID_MAX,
+    SMS_ID_MIN,
+    SMS_ID_RESERVE,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
@@ -39,6 +43,13 @@ class DeviceStore:
             hass, STORAGE_VERSION, f"{STORAGE_KEY}.mark.{entry_id}"
         )
         self.high_water = 0
+        # Short SMS handles: {"475": {"mac": ..., "ts": ..., "done": bool}}
+        self.ids: dict[str, dict] = {}
+        # Its own file so a long history never bloats the device list.
+        self._audit_store = Store(
+            hass, STORAGE_VERSION, f"{STORAGE_KEY}.audit.{entry_id}"
+        )
+        self.audit: list[dict] = []
         self.allowed: dict[str, dict] = {}
         self.denied: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
@@ -53,6 +64,14 @@ class DeviceStore:
         self.labels = {
             _norm(k): v for k, v in (data.get("labels") or {}).items() if v
         }
+        self.ids = {
+            str(k): v for k, v in (data.get("ids") or {}).items() if isinstance(v, dict)
+        }
+        self._expire_ids()
+
+        audit = await self._audit_store.async_load() or {}
+        self.audit = list(audit.get("entries") or [])[-AUDIT_MAX:]
+
         mark = await self._mark_store.async_load() or {}
         self.high_water = int(mark.get("high_water") or 0)
         if self.high_water < len(self.allowed):
@@ -69,8 +88,75 @@ class DeviceStore:
                 "denied": self.denied,
                 "pending": self.pending,
                 "labels": self.labels,
+                "ids": self.ids,
             }
         )
+
+    # --- SMS ids ------------------------------------------------------------
+
+    def _expire_ids(self) -> None:
+        """Drop claims for decisions old enough that a reply cannot be pending."""
+        now = int(time.time())
+        for key in [
+            k
+            for k, v in self.ids.items()
+            if v.get("done") and now - int(v.get("ts") or 0) > SMS_ID_RESERVE
+        ]:
+            del self.ids[key]
+
+    def mac_for_id(self, sms_id: str) -> tuple[str, bool] | None:
+        """Return (mac, already_decided) or None if the id is unknown."""
+        rec = self.ids.get(str(sms_id))
+        if not rec:
+            return None
+        return _norm(rec.get("mac", "")), bool(rec.get("done"))
+
+    def id_for_mac(self, mac: str) -> str:
+        mac = _norm(mac)
+        for key, rec in self.ids.items():
+            if _norm(rec.get("mac", "")) == mac and not rec.get("done"):
+                return key
+        return ""
+
+    async def async_claim_id(self, mac: str, taken: set[str]) -> str:
+        """Give this MAC a short handle, avoiding anything already in use.
+
+        ``taken`` carries ids in use on other sites, so a reply can never be
+        ambiguous about which controller it meant.
+        """
+        mac = _norm(mac)
+        existing = self.id_for_mac(mac)
+        if existing:
+            return existing
+        self._expire_ids()
+        used = set(self.ids) | set(taken)
+        for candidate in range(SMS_ID_MIN, SMS_ID_MAX + 1):
+            key = str(candidate)
+            if key not in used:
+                self.ids[key] = {"mac": mac, "ts": int(time.time()), "done": False}
+                await self.async_save()
+                return key
+        return ""
+
+    async def async_close_id(self, mac: str) -> None:
+        """Mark this MAC's handle as decided, keeping it claimed for a while."""
+        mac = _norm(mac)
+        touched = False
+        for rec in self.ids.values():
+            if _norm(rec.get("mac", "")) == mac and not rec.get("done"):
+                rec["done"] = True
+                rec["ts"] = int(time.time())
+                touched = True
+        if touched:
+            await self.async_save()
+
+    # --- audit --------------------------------------------------------------
+
+    async def async_log(self, entry: dict) -> None:
+        self.audit.append(entry)
+        if len(self.audit) > AUDIT_MAX:
+            self.audit = self.audit[-AUDIT_MAX:]
+        await self._audit_store.async_save({"entries": self.audit})
 
     async def _save_mark(self) -> None:
         await self._mark_store.async_save({"high_water": self.high_water})

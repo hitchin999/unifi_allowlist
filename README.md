@@ -259,6 +259,43 @@ made. It refuses to adopt more than 25 at once and logs
 instead, so a controller-side mistake cannot empty your allow list unattended.
 Run the service once with `dry_run: true` before enabling it.
 
+## Text message control
+
+With the [Telebroad SMS](https://github.com/hitchin999/telebroad_sms) integration
+installed, each waiting device can be texted out to people who have no Home
+Assistant account at all:
+
+```
+#475 Grzegorz-s-S25-Ultra
+Camp Meor Hatorah, 5 GHz, B Basement AP
+Reply: 475 allow  or  475 keep
+```
+
+The id belongs to that MAC permanently, so unlike a menu position it cannot go
+stale while the queue moves. Replies are read straight off the
+`telebroad_sms_received` event, in either order and several at a time:
+`475 allow 476 keep` answers two prompts in one message. A decided id stays
+claimed for a day, so a late reply gets "already handled" rather than landing on
+whatever device inherited the number. Ids are allocated across every configured
+site, so a bare number is never ambiguous.
+
+Set the recipients per site, so one person can be given the camp and never see
+the other controller. Only listed numbers are acted on, and an unlisted sender
+gets silence rather than a refusal.
+
+**Caller ID is trivially spoofable.** Anyone who learns the line number and the
+id format can reply. Set a PIN in the options if that matters — replies then
+read `475 allow 4321`.
+
+## Who did what
+
+Every decision is recorded with the device, who made it and when: a Home
+Assistant user by name, `SMS <contact>` resolved against the SMS integration's
+contacts, `notification`, or `automatic` for enforcement and sync. The **History**
+button in the panel shows the last few hundred, and each one is also fired as a
+`unifi_allowlist_decision` event so it lands in the logbook and can be automated
+on.
+
 ## Multiple sites
 
 Add the integration once per UniFi site. Each site gets its own config entry,

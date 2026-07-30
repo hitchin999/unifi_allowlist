@@ -29,6 +29,10 @@ from .const import (
     CONF_ADOPT_BLOCKS,
     CONF_DENY_NAMES,
     CONF_DENY_UNNAMED,
+    CONF_SMS_DIGEST,
+    CONF_SMS_LINE,
+    CONF_SMS_NUMBERS,
+    CONF_SMS_PIN,
     CONF_FORGET_IN_UNIFI,
     CONF_BLOCK_FIRST,
     CONF_CHANNEL,
@@ -45,6 +49,8 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_ADOPT_BLOCKS,
     DEFAULT_DENY_UNNAMED,
+    DEFAULT_SMS_DIGEST,
+    SMS_ENABLED,
     DEFAULT_FORGET_IN_UNIFI,
     DEFAULT_BLOCK_FIRST,
     DEFAULT_CHANNEL,
@@ -188,6 +194,30 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
     """Tune behaviour without re-adding the integration."""
 
+    @staticmethod
+    def _sms_fields(current: dict) -> dict:
+        """Only present when SMS_ENABLED is switched on in const.py."""
+        if not SMS_ENABLED:
+            return {}
+        return {
+            vol.Optional(
+                CONF_SMS_NUMBERS, default=current.get(CONF_SMS_NUMBERS, [])
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[],
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                    custom_value=True,
+                )
+            ),
+            vol.Optional(CONF_SMS_LINE, default=current.get(CONF_SMS_LINE, "")): str,
+            vol.Optional(CONF_SMS_PIN, default=current.get(CONF_SMS_PIN, "")): str,
+            vol.Optional(
+                CONF_SMS_DIGEST,
+                default=current.get(CONF_SMS_DIGEST, DEFAULT_SMS_DIGEST),
+            ): bool,
+        }
+
     async def async_step_init(self, user_input: dict | None = None):
         entry = self.config_entry
 
@@ -308,6 +338,7 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_GROUP, default=current.get(CONF_GROUP, DEFAULT_GROUP)
                 ): TextSelector(),
+                **self._sms_fields(current),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

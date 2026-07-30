@@ -22,6 +22,10 @@ CONF_ADOPT_BLOCKS = "adopt_blocks"
 CONF_FORGET_IN_UNIFI = "forget_in_unifi"
 CONF_DENY_NAMES = "deny_names"
 CONF_DENY_UNNAMED = "deny_unnamed"
+CONF_SMS_NUMBERS = "sms_numbers"
+CONF_SMS_LINE = "sms_line"
+CONF_SMS_PIN = "sms_pin"
+CONF_SMS_DIGEST = "sms_digest"
 CONF_NOTIFY_GAP = "notify_gap"
 
 DEFAULT_SCAN_INTERVAL = 30
@@ -30,6 +34,29 @@ DEFAULT_BLOCK_FIRST = True
 DEFAULT_ADOPT_BLOCKS = True
 DEFAULT_FORGET_IN_UNIFI = True
 DEFAULT_DENY_UNNAMED = False
+DEFAULT_SMS_DIGEST = False
+
+# --- SMS bridge (Telebroad SMS Commander) --------------------------------
+# Off, and invisible, unless you turn it on here. Nothing about SMS appears in
+# the options screen while this is False, no listener is registered and no
+# message is ever sent, so an install without the Telebroad integration sees no
+# trace of it. Flip to True (File editor -> custom_components/unifi_allowlist/
+# const.py) and restart to expose the settings.
+SMS_ENABLED = False
+
+SMS_DOMAIN = "telebroad_sms"
+SMS_SERVICE = "send_sms"
+SMS_EVENT = "telebroad_sms_received"
+# Short enough to type on a phone, long enough not to collide often.
+SMS_ID_MIN = 100
+SMS_ID_MAX = 999
+# A decided id stays claimed this long, so a late reply says "already handled"
+# instead of landing on whatever device inherited the number.
+SMS_ID_RESERVE = 86400
+
+# --- audit ---------------------------------------------------------------
+AUDIT_MAX = 400
+EVENT_DECISION = "unifi_allowlist_decision"
 # Refuse a runaway adoption; a first sync with many manual blocks should go
 # through the service, where it can be previewed.
 ADOPT_LIMIT = 25
@@ -54,6 +81,7 @@ DEFAULT_CHANNEL = "UniFi Allow List"
 DEFAULT_GROUP = "UniFi Allowlist"
 
 PANEL_URL_PATH = "wifi-access"
+PANEL_ASSET = "unifi-allowlist-panel.js"
 PANEL_TITLE = "Wifi Access"
 PANEL_ICON = "mdi:wifi-lock"
 STATIC_URL = "/unifi_allowlist_static"
