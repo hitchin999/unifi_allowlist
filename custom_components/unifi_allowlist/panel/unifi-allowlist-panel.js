@@ -450,7 +450,9 @@ const STYLES = `
   .tools {
     flex: 0 0 auto;
     padding: 12px 18px 0;
+    display: flex; align-items: center; gap: 10px;
   }
+  .tools .search { flex: 1 1 auto; min-width: 0; }
   .search {
     display: flex; align-items: center; gap: 9px;
     height: 46px; padding: 0 14px;
@@ -568,24 +570,96 @@ const STYLES = `
 
   .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 
-  .tools {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-    margin: 0 0 10px;
+  /* ---- filter button + sheet ---- */
+  .filter-btn {
+    flex: 0 0 auto; position: relative;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 46px; padding: 0 14px; cursor: pointer;
+    border-radius: 16px;
+    background: var(--ua-glass-bg);
+    border: 1px solid var(--ua-glass-border);
+    box-shadow: var(--ua-glass-shadow);
+    backdrop-filter: blur(16px) saturate(1.35);
+    -webkit-backdrop-filter: blur(16px) saturate(1.35);
+    color: var(--ua-text);
+    font: inherit; font-size: 14px; font-weight: 600;
   }
-  .tools select {
-    font: inherit; font-size: 13px; padding: 6px 10px;
-    border-radius: 10px; border: 1px solid var(--ua-line);
+  .filter-btn:hover { border-color: var(--ua-blue); }
+  .filter-btn .dot {
+    position: absolute; top: 7px; right: 8px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 999px; background: var(--ua-blue); color: #fff;
+    font-size: 10px; font-weight: 800; line-height: 16px; text-align: center;
+  }
+  .filter-btn .lbl { display: none; }
+  @media (min-width: 720px) { .filter-btn .lbl { display: inline; } }
+
+  .sheet-bd {
+    position: fixed; inset: 0; z-index: 40;
+    background: var(--ua-overlay); opacity: 0;
+    pointer-events: none; transition: opacity .18s ease;
+  }
+  .sheet-bd.open { opacity: 1; pointer-events: auto; }
+
+  .sheet {
+    position: fixed; z-index: 41;
+    left: 0; right: 0; bottom: 0; max-height: 82vh;
+    display: flex; flex-direction: column;
     background: var(--ua-card); color: var(--ua-text);
-    max-width: 46vw;
+    border-top-left-radius: 20px; border-top-right-radius: 20px;
+    box-shadow: var(--ua-pop-shadow);
+    transform: translateY(101%); transition: transform .22s cubic-bezier(.2,.7,.3,1);
   }
-  .tools select:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 1px; }
-  .tools .spacer { flex: 1 1 auto; }
-  .tools .count { font-size: 12px; color: var(--ua-dim); }
-  .tools button.clear {
-    font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer;
-    border-radius: 10px; border: 1px solid var(--ua-line);
-    background: transparent; color: var(--ua-dim);
+  .sheet.open { transform: none; }
+  @media (min-width: 720px) {
+    .sheet {
+      left: auto; top: 0; bottom: 0; width: 380px; max-height: none;
+      border-radius: 0; transform: translateX(101%);
+    }
   }
+  .sheet-hd {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--ua-line);
+  }
+  .sheet-hd h2 { margin: 0; font-size: 17px; font-weight: 700; flex: 1 1 auto; }
+  .sheet-body { overflow: auto; padding: 8px 12px 16px; -webkit-overflow-scrolling: touch; }
+  .sheet-sec { margin-top: 14px; }
+  .sheet-sec:first-child { margin-top: 4px; }
+  .sheet-sec > h3 {
+    margin: 0 4px 6px; font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ua-dim);
+  }
+  .sheet-group { border: 1px solid var(--ua-line); border-radius: 14px; overflow: hidden; }
+  .opt {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 13px 14px; cursor: pointer; font: inherit; font-size: 15px;
+    background: transparent; color: var(--ua-text); border: 0; text-align: left;
+    border-top: 1px solid var(--ua-line);
+  }
+  .opt:first-child { border-top: 0; }
+  .opt:hover { background: var(--ua-bg); }
+  .opt .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .opt .n { color: var(--ua-dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .opt .box {
+    flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px;
+    border: 2px solid var(--ua-line); display: grid; place-items: center;
+  }
+  .opt[aria-checked="true"] .box { background: var(--ua-blue); border-color: var(--ua-blue); }
+  .opt[aria-checked="true"] .box ha-icon { color: #fff; --mdc-icon-size: 16px; width: 16px; height: 16px; }
+  .opt[aria-checked="false"] .box ha-icon { display: none; }
+  .opt.radio .box { border-radius: 50%; }
+  .sheet-ft {
+    display: flex; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--ua-line);
+  }
+  .sheet-ft button {
+    flex: 1 1 0; height: 44px; border-radius: var(--ua-r); cursor: pointer;
+    font: inherit; font-size: 15px; font-weight: 700; border: 1px solid var(--ua-line);
+    background: transparent; color: var(--ua-text);
+  }
+  .sheet-ft button.primary { background: var(--ua-blue); border-color: var(--ua-blue); color: #fff; }
+
+
   .chip {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 2px 8px; border-radius: 999px;
@@ -844,6 +918,7 @@ const STYLES = `
 
     .tools { padding: 10px 12px 0; }
     .search { height: 44px; border-radius: 15px; }
+    .filter-btn { height: 44px; border-radius: 15px; padding: 0 12px; }
     .list-scroll { padding: 10px 12px 96px; }
 
     /* floating glass tab bar, pinned and always visible */
@@ -1053,14 +1128,16 @@ class UnifiAllowlistPanel extends HTMLElement {
   _loadPrefs() {
     if (this._sort !== undefined) return;
     this._sort = "name";
-    this._filters = {};
+    this._filters = { conn: [], ssid: [], ap: [], band: [] };
     try {
       const raw = window.localStorage.getItem("ual_view");
       if (raw) {
         const saved = JSON.parse(raw) || {};
         if (typeof saved.sort === "string") this._sort = saved.sort;
         if (saved.filters && typeof saved.filters === "object") {
-          this._filters = saved.filters;
+          for (const k of ["conn", "ssid", "ap", "band"]) {
+            if (Array.isArray(saved.filters[k])) this._filters[k] = saved.filters[k];
+          }
         }
       }
     } catch (err) {
@@ -1377,9 +1454,32 @@ class UnifiAllowlistPanel extends HTMLElement {
               <ha-icon icon="mdi:close-circle"></ha-icon>
             </button>
           </div>
+          <button class="filter-btn" id="filter-btn" aria-haspopup="dialog"
+                  aria-expanded="false" aria-label="Sort and filter">
+            <ha-icon icon="mdi:tune-variant"></ha-icon>
+            <span class="lbl">Sort &amp; filter</span>
+            <span class="dot" id="filter-dot" hidden></span>
+          </button>
         </div>
 
         <div class="list-scroll" id="list"></div>
+
+        <div class="sheet-bd" id="sheet-bd"></div>
+        <aside class="sheet" id="sheet" role="dialog" aria-modal="true"
+               aria-label="Sort and filter" hidden>
+          <div class="sheet-hd">
+            <ha-icon icon="mdi:tune-variant"></ha-icon>
+            <h2>Sort &amp; filter</h2>
+            <button class="icon-btn" id="sheet-x" aria-label="Close">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="sheet-body" id="sheet-body"></div>
+          <div class="sheet-ft">
+            <button id="sheet-clear">Clear all</button>
+            <button class="primary" id="sheet-done">Done</button>
+          </div>
+        </aside>
 
         <div class="row-menu" id="row-menu"></div>
         <div class="toast" id="toast"></div>
@@ -1393,6 +1493,35 @@ class UnifiAllowlistPanel extends HTMLElement {
       this.dispatchEvent(
         new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })
       );
+    });
+
+    root.getElementById("filter-btn").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._openSheet(!this._sheetOpen);
+    });
+    root.getElementById("sheet-bd").addEventListener("click", () => this._openSheet(false));
+    root.getElementById("sheet-x").addEventListener("click", () => this._openSheet(false));
+    root.getElementById("sheet-done").addEventListener("click", () => this._openSheet(false));
+    root.getElementById("sheet-clear").addEventListener("click", () => {
+      this._filters = { conn: [], ssid: [], ap: [], band: [] };
+      this._savePrefs();
+      this._renderSheet();
+      this._renderList();
+    });
+    root.getElementById("sheet").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const btn = ev.target.closest && ev.target.closest(".opt");
+      if (!btn) return;
+      const group = btn.dataset.group;
+      const value = btn.dataset.value;
+      if (group === "sort") this._sort = value;
+      else this._toggleFilter(group, value);
+      this._savePrefs();
+      this._renderSheet();
+      this._renderList();
+    });
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && this._sheetOpen) this._openSheet(false);
     });
 
     root.getElementById("refresh").addEventListener("click", (ev) => {
@@ -1907,6 +2036,8 @@ class UnifiAllowlistPanel extends HTMLElement {
       );
     } else if (key === "mac") {
       copy.sort((a, b) => (a.mac || "").localeCompare(b.mac || ""));
+    } else if (key === "name_desc") {
+      copy.sort((a, b) => byName(b, a));
     } else {
       copy.sort(byName);
     }
@@ -1926,76 +2057,148 @@ class UnifiAllowlistPanel extends HTMLElement {
     return n;
   }
 
+  /* Within a group the choices are OR'd, across groups they are AND'd -
+     the same way the UniFi client filters behave. */
+  _matches(r, f, skip) {
+    const on = (g) => (f[g] || []).length && g !== skip;
+    if (on("conn")) {
+      const want = f.conn;
+      const state = r.live ? "on" : "off";
+      if (!want.includes(state)) return false;
+    }
+    if (on("ssid") && !f.ssid.includes(r.ssid)) return false;
+    if (on("ap") && !f.ap.includes(r.ap)) return false;
+    if (on("band") && !f.band.includes(r.band)) return false;
+    return true;
+  }
+
   _applyFilters(rows) {
     const f = this._filters || {};
-    return rows.filter((r) => {
-      if (f.conn === "on" && !r.live) return false;
-      if (f.conn === "off" && r.live) return false;
-      if (f.ssid && r.ssid !== f.ssid) return false;
-      if (f.ap && r.ap !== f.ap) return false;
-      if (f.band && r.band !== f.band) return false;
-      return true;
-    });
+    return rows.filter((r) => this._matches(r, f, null));
+  }
+
+  _activeCount() {
+    const f = this._filters || {};
+    return ["conn", "ssid", "ap", "band"].reduce(
+      (n, g) => n + ((f[g] || []).length ? 1 : 0),
+      0
+    );
   }
 
   _filtersActive() {
-    const f = this._filters || {};
-    return Boolean(f.conn || f.ssid || f.ap || f.band);
+    return this._activeCount() > 0;
   }
 
-  _toolsHtml(shown, total, all) {
-    const f = this._filters || {};
+  _toggleFilter(group, value) {
+    const cur = (this._filters[group] || []).slice();
+    const i = cur.indexOf(value);
+    if (i >= 0) cur.splice(i, 1);
+    else cur.push(value);
+    this._filters[group] = cur;
+  }
+
+  /* ---- sort & filter sheet ---- */
+
+  _openSheet(open) {
+    const root = this.shadowRoot;
+    const sheet = root.getElementById("sheet");
+    const bd = root.getElementById("sheet-bd");
+    if (!sheet || !bd) return;
+    this._sheetOpen = Boolean(open);
+    if (this._sheetOpen) {
+      sheet.hidden = false;
+      this._renderSheet();
+      // Next frame, so the transition has a start state to animate from.
+      window.requestAnimationFrame(() => {
+        sheet.classList.add("open");
+        bd.classList.add("open");
+      });
+    } else {
+      sheet.classList.remove("open");
+      bd.classList.remove("open");
+      window.setTimeout(() => {
+        if (!this._sheetOpen) sheet.hidden = true;
+      }, 240);
+    }
+    const btn = root.getElementById("filter-btn");
+    if (btn) btn.setAttribute("aria-expanded", String(this._sheetOpen));
+  }
+
+  _sortOptions() {
+    return [
+      ["name", "Name (A to Z)", "mdi:sort-alphabetical-ascending"],
+      ["name_desc", "Name (Z to A)", "mdi:sort-alphabetical-descending"],
+      ["seen", "Last seen", "mdi:clock-outline"],
+      ["ip", "IP address", "mdi:ip-network-outline"],
+      ["ap", "Access point", "mdi:router-wireless"],
+      ["mac", "MAC address", "mdi:identifier"],
+    ];
+  }
+
+  _renderSheet() {
+    const root = this.shadowRoot;
+    const body = root.getElementById("sheet-body");
+    if (!body) return;
+    const f = this._filters;
+    const all = this._rowsForTab();
+
+    const opt = (group, value, label, checked, count, radio) =>
+      `<button class="opt${radio ? " radio" : ""}" role="${
+        radio ? "radio" : "checkbox"
+      }" aria-checked="${checked}" data-group="${this._esc(group)}"
+        data-value="${this._esc(value)}">
+         <span class="box"><ha-icon icon="mdi:check"></ha-icon></span>
+         <span class="nm">${this._esc(label)}</span>
+         ${count === null ? "" : `<span class="n">${count}</span>`}
+       </button>`;
+
+    // Counts ignore their own group, so you can see what each choice would add.
+    const countFor = (group, value) =>
+      all.filter((r) => {
+        if (!this._matches(r, f, group)) return false;
+        if (group === "conn") return (r.live ? "on" : "off") === value;
+        return r[group] === value;
+      }).length;
+
+    const section = (title, html) =>
+      html ? `<div class="sheet-sec"><h3>${title}</h3><div class="sheet-group">${html}</div></div>` : "";
+
     const uniq = (key) =>
-      Array.from(new Set((all || []).map((r) => r[key]).filter(Boolean))).sort();
-    const opt = (v, label, cur) =>
-      `<option value="${this._esc(v)}"${v === (cur || "") ? " selected" : ""}>${this._esc(label)}</option>`;
+      Array.from(new Set(all.map((r) => r[key]).filter(Boolean))).sort();
 
-    const ssids = uniq("ssid");
-    const aps = uniq("ap");
-    const bands = uniq("band");
-    const hidden = total - shown;
+    const sortHtml = this._sortOptions()
+      .map(([v, label]) => opt("sort", v, label, this._sortKey() === v, null, true))
+      .join("");
 
-    return `<div class="tools">
-      <select id="sortby" aria-label="Sort by">
-        ${opt("name", "Sort: name", this._sortKey())}
-        ${opt("seen", "Sort: last seen", this._sortKey())}
-        ${opt("ip", "Sort: IP", this._sortKey())}
-        ${opt("ap", "Sort: access point", this._sortKey())}
-        ${opt("mac", "Sort: MAC", this._sortKey())}
-      </select>
-      <select id="fconn" aria-label="Connection filter">
-        ${opt("", "Any state", f.conn)}
-        ${opt("on", "On wifi now", f.conn)}
-        ${opt("off", "Not connected", f.conn)}
-      </select>
-      ${
-        ssids.length > 1
-          ? `<select id="fssid" aria-label="Network filter">
-               ${opt("", "Any network", f.ssid)}
-               ${ssids.map((v) => opt(v, v, f.ssid)).join("")}
-             </select>`
-          : ""
-      }
-      ${
-        aps.length > 1
-          ? `<select id="fap" aria-label="Access point filter">
-               ${opt("", "Any access point", f.ap)}
-               ${aps.map((v) => opt(v, v, f.ap)).join("")}
-             </select>`
-          : ""
-      }
-      ${
-        bands.length > 1
-          ? `<select id="fband" aria-label="Band filter">
-               ${opt("", "Any band", f.band)}
-               ${bands.map((v) => opt(v, v, f.band)).join("")}
-             </select>`
-          : ""
-      }
-      <span class="spacer"></span>
-      ${hidden > 0 ? `<span class="count">${hidden} hidden</span>` : ""}
-      ${this._filtersActive() ? `<button class="clear" id="clearf">Clear filters</button>` : ""}
-    </div>`;
+    const connHtml = [
+      ["on", "On wifi now"],
+      ["off", "Not connected"],
+    ]
+      .map(([v, label]) =>
+        opt("conn", v, label, (f.conn || []).includes(v), countFor("conn", v))
+      )
+      .join("");
+
+    const listFor = (group) =>
+      uniq(group)
+        .map((v) =>
+          opt(group, v, v, (f[group] || []).includes(v), countFor(group, v))
+        )
+        .join("");
+
+    body.innerHTML =
+      section("Sort by", sortHtml) +
+      section("Status", connHtml) +
+      section("Network", uniq("ssid").length > 1 ? listFor("ssid") : "") +
+      section("Access point", uniq("ap").length > 1 ? listFor("ap") : "") +
+      section("Band", uniq("band").length > 1 ? listFor("band") : "");
+
+    const dot = root.getElementById("filter-dot");
+    if (dot) {
+      const n = this._activeCount();
+      dot.textContent = String(n);
+      dot.hidden = !n;
+    }
   }
 
   /* ---- rows ---- */
@@ -2142,9 +2345,16 @@ class UnifiAllowlistPanel extends HTMLElement {
       );
     }
 
+    const dot = this.shadowRoot.getElementById("filter-dot");
+    if (dot) {
+      const active = this._activeCount();
+      dot.textContent = String(active);
+      dot.hidden = !active;
+    }
+    if (this._sheetOpen) this._renderSheet();
+
     if (!rows.length) {
       list.innerHTML =
-        this._toolsHtml(0, total, allRows) +
         `<div class="empty"><ha-icon icon="${this._emptyIcon()}"></ha-icon>` +
         `<span>${this._esc(this._emptyText())}</span></div>`;
       return;
@@ -2153,7 +2363,6 @@ class UnifiAllowlistPanel extends HTMLElement {
     const shown = rows.slice(0, MAX_ROWS);
 
     list.innerHTML =
-      this._toolsHtml(rows.length, total, allRows) +
       this._bulkHtml(rows) +
       shown.map((r) => this._rowHtml(r)).join("") +
       (rows.length > MAX_ROWS

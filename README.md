@@ -162,11 +162,15 @@ MIT
 
 ## Sorting and filtering
 
-Every tab has a toolbar above the list: sort by name, last seen, IP, access
-point or MAC, and filter by connection state, network, access point or band.
-The options offered are built from the rows actually in front of you, so a
-filter can never produce a guaranteed-empty list, and a count of what is hidden
-sits on the right. Choices persist across visits.
+**Sort & filter** beside the search box opens a sheet: sort by name either way,
+last seen, IP, access point or MAC, and filter by status, network, access point
+or band. Choices within a group are OR'd and groups are AND'd together, so
+"Camp + Guest, on wifi now" reads the way you would expect.
+
+Each choice carries a count that ignores its own group, so you can see what
+selecting it would bring in. Only groups with more than one value on the
+current tab are shown, and the button carries a badge with the number of active
+filter groups. Choices persist across visits.
 
 IP sorting is numeric, so `192.168.0.9` comes before `192.168.0.100`.
 
