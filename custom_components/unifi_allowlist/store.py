@@ -14,7 +14,12 @@ import time
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import STORAGE_KEY, STORAGE_VERSION
+from .const import (
+    DROP_GUARD_FLOOR,
+    DROP_GUARD_RATIO,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +33,12 @@ class DeviceStore:
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         self._store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}.{entry_id}")
+        # Deliberately a separate file: if the device list is lost or rolled
+        # back, the mark has to survive to prove the loss happened.
+        self._mark_store = Store(
+            hass, STORAGE_VERSION, f"{STORAGE_KEY}.mark.{entry_id}"
+        )
+        self.high_water = 0
         self.allowed: dict[str, dict] = {}
         self.denied: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
@@ -42,6 +53,13 @@ class DeviceStore:
         self.labels = {
             _norm(k): v for k, v in (data.get("labels") or {}).items() if v
         }
+        mark = await self._mark_store.async_load() or {}
+        self.high_water = int(mark.get("high_water") or 0)
+        if self.high_water < len(self.allowed):
+            # First run, or the list has grown since we last looked.
+            self.high_water = len(self.allowed)
+            await self._save_mark()
+
         self._loaded = True
 
     async def async_save(self) -> None:
@@ -53,6 +71,44 @@ class DeviceStore:
                 "labels": self.labels,
             }
         )
+
+    async def _save_mark(self) -> None:
+        await self._mark_store.async_save({"high_water": self.high_water})
+
+    async def async_lower_mark(self) -> None:
+        """We authored a removal, so the smaller list is the new normal.
+
+        Only called from methods that deliberately take entries out of the
+        allow list. A save from anywhere else must never move the mark, or a
+        lost list would erase the very evidence the guard depends on.
+        """
+        if len(self.allowed) < self.high_water:
+            self.high_water = len(self.allowed)
+            await self._save_mark()
+
+    async def async_raise_mark(self) -> None:
+        """Track growth. Called after anything that can add to the allow list."""
+        if len(self.allowed) > self.high_water:
+            self.high_water = len(self.allowed)
+            await self._save_mark()
+
+    async def async_accept_size(self) -> int:
+        """Take the current size as the new normal, clearing the drop guard."""
+        self.high_water = len(self.allowed)
+        await self._save_mark()
+        return self.high_water
+
+    @property
+    def dropped(self) -> bool:
+        """True when the allow list shrank without us authoring the removals.
+
+        Every legitimate removal lowers the mark as it goes, so a gap between
+        the mark and the list can only mean the stored list came back smaller
+        than we left it.
+        """
+        if self.high_water < DROP_GUARD_FLOOR:
+            return False
+        return len(self.allowed) < self.high_water * DROP_GUARD_RATIO
 
     # --- queries -----------------------------------------------------------
 
@@ -99,6 +155,7 @@ class DeviceStore:
             "added": int(time.time()),
         }
         await self.async_save()
+        await self.async_raise_mark()
 
     async def async_deny(self, mac: str, name: str = "", ssid: str = "") -> None:
         mac = _norm(mac)
@@ -109,6 +166,7 @@ class DeviceStore:
             "added": int(time.time()),
         }
         await self.async_save()
+        await self.async_lower_mark()
 
     async def async_forget(self, mac: str) -> None:
         """Drop a MAC from every list, as if it had never been seen."""
@@ -117,6 +175,7 @@ class DeviceStore:
         self.denied.pop(mac, None)
         self.pending.pop(mac, None)
         await self.async_save()
+        await self.async_lower_mark()
 
     async def async_forget_many(self, macs: list[str]) -> int:
         """Drop several MACs from every list, writing storage only once."""
@@ -129,6 +188,7 @@ class DeviceStore:
             gone += 1 if hit else 0
         if gone:
             await self.async_save()
+            await self.async_lower_mark()
         return gone
 
     async def async_add_pending(
@@ -175,6 +235,7 @@ class DeviceStore:
             moved += 1
         if moved:
             await self.async_save()
+            await self.async_raise_mark()
         return moved
 
     async def async_deny_many(self, macs: list[str], source: str = "") -> int:
@@ -195,6 +256,7 @@ class DeviceStore:
             moved += 1
         if moved:
             await self.async_save()
+            await self.async_lower_mark()
         return moved
 
     async def async_bulk_allow(self, macs: list[str]) -> int:
@@ -207,6 +269,7 @@ class DeviceStore:
                 added += 1
         if added:
             await self.async_save()
+            await self.async_raise_mark()
         return added
 
     async def async_bulk_remove_allowed(self, macs: list[str]) -> int:
@@ -216,6 +279,7 @@ class DeviceStore:
                 removed += 1
         if removed:
             await self.async_save()
+            await self.async_lower_mark()
         return removed
 
     # --- bulk file IO ------------------------------------------------------
@@ -274,6 +338,7 @@ class DeviceStore:
 
         if added:
             await self.async_save()
+            await self.async_raise_mark()
         _LOGGER.info("import: %s of %s MACs added to %s", added, len(macs), target)
         return added
 

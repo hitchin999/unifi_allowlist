@@ -287,3 +287,20 @@ unblock_untracked:
       selector:
         config_entry:
           integration: unifi_allowlist
+
+accept_list_size:
+  name: Accept the current allow list size
+  description: >-
+    Clears the "data looks to have been lost" guard by taking the current allow
+    list as correct. Only use this when you know the smaller list is right, for
+    example after editing storage by hand. Restoring a backup is the usual fix.
+  fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist

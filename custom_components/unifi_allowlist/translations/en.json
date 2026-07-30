@@ -52,7 +52,7 @@
           "deny_names": "One entry per name, case insensitive, * and ? wildcards allowed. Matching devices are blocked silently with no notification and no queue entry. Names are reported by the device and can be changed, so treat this as noise control rather than security.",
           "deny_unnamed": "Devices with no hostname at all. This catches a lot of legitimate hardware such as cameras and IoT gear, so check the waiting list before turning it on.",
           "forget_in_unifi": "Deletes the client record on the controller, the same as Forget in the UniFi UI - alias, fixed IP and history included, with no undo. Clients that have a name or a fixed IP set in UniFi are only unblocked instead, so nothing you configured there is destroyed.",
-          "min_list_guard": "A dead man's switch. If the allow list is smaller than this, nothing is blocked at all. It exists so that an empty or half-loaded list can never lock every device off the network. Set it a little below the number of devices you expect to allow, or 0 to switch the protection off."
+          "min_list_guard": "An optional hard floor: below this many allowed devices, nothing is blocked at all. Off by default, because losing the stored list is caught separately and a fixed number suits a large site far better than a small one. Set it only if you want a belt-and-braces floor of your own."
         }
       }
     }

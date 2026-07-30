@@ -38,7 +38,14 @@ ADOPT_LIMIT = 25
 # deliberately blocking it in the UniFi UI.
 ADOPT_ALLOWED_AFTER = 3
 DEFAULT_MAX_PER_RUN = 10
-DEFAULT_MIN_LIST_GUARD = 25
+# Off by default. The absolute floor is a poor fit for a five-device house and
+# the drop guard below catches the failure it was really aimed at.
+DEFAULT_MIN_LIST_GUARD = 0
+# Refuse to enforce when the allow list has lost this much of its high-water
+# mark without the integration having authored the removals.
+DROP_GUARD_RATIO = 0.4
+# Below this, a list is too small for a ratio to mean anything.
+DROP_GUARD_FLOOR = 4
 DEFAULT_NOTIFY_GAP = 1.0
 DEFAULT_CHANNEL = "UniFi Allow List"
 DEFAULT_GROUP = "unifi_allowlist"
@@ -64,6 +71,7 @@ SERVICE_ALLOW_ONLINE = "allow_online_unknown"
 SERVICE_FORGET_OFFLINE = "forget_offline_pending"
 SERVICE_SYNC = "sync_from_unifi"
 SERVICE_UNBLOCK_UNTRACKED = "unblock_untracked"
+SERVICE_ACCEPT_LIST_SIZE = "accept_list_size"
 
 ATTR_SITE = "site"
 ATTR_REBLOCK = "reblock"

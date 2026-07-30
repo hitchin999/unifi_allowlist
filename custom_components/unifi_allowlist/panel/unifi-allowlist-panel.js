@@ -1627,6 +1627,15 @@ class UnifiAllowlistPanel extends HTMLElement {
         `<div class="banner err"><ha-icon icon="mdi:alert-circle-outline"></ha-icon>` +
         `<span>${this._esc(this._error)}</span></div>`;
     }
+    if (d && d.drop_blocked) {
+      bannerHtml +=
+        `<div class="banner err"><ha-icon icon="mdi:database-alert-outline"></ha-icon>` +
+        `<span>Not blocking anything: the allow list holds ${d.allowed.length} ` +
+        `device${d.allowed.length === 1 ? "" : "s"} but ${d.high_water} were ` +
+        `saved, so data looks to have been lost. Restore a backup, or call ` +
+        `<b>unifi_allowlist.accept_list_size</b> if the smaller list is right.` +
+        `</span></div>`;
+    }
     if (d && d.guard_blocked) {
       bannerHtml +=
         `<div class="banner err"><ha-icon icon="mdi:shield-off-outline"></ha-icon>` +

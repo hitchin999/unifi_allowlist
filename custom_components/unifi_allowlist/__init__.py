@@ -46,6 +46,7 @@ from .const import (
     SERVICE_FORGET,
     SERVICE_FORGET_OFFLINE,
     SERVICE_SYNC,
+    SERVICE_ACCEPT_LIST_SIZE,
     SERVICE_UNBLOCK_UNTRACKED,
     SERVICE_IMPORT_LIST,
     SERVICE_SET_NAME,
@@ -316,6 +317,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
         if coord := _target(hass, call):
             await coord.async_allow_online_unknown()
 
+    async def _accept_list_size(call):
+        if coord := _target(hass, call):
+            await coord.async_accept_list_size()
+
     async def _unblock_untracked(call):
         if coord := _target(hass, call):
             await coord.async_unblock_untracked()
@@ -337,6 +342,9 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_UNBLOCK_UNTRACKED, _unblock_untracked, schema=SITE_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_ACCEPT_LIST_SIZE, _accept_list_size, schema=SITE_SCHEMA
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_NAME, _set_name, schema=NAME_SCHEMA
@@ -510,6 +518,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "breaker": bool((coord.data or {}).get("breaker")),
                 "error": coord.last_error,
                 "guard_blocked": coord.guard_blocked,
+                "drop_blocked": coord.drop_blocked,
+                "high_water": coord.store.high_water,
                 "guard_min": coord.guard_min,
             }
         )

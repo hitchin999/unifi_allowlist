@@ -76,7 +76,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._controller_name: str | None = None
         self.suppressed_last_run = 0
         self.guard_blocked = False
+        self.drop_blocked = False
         self._guard_logged = False
+        self._drop_logged = False
         self._notify_backlog: set[str] = set()
         self._blocked_streak: dict[str, int] = {}
 
@@ -446,6 +448,28 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     async def _enforce(
         self, seen: dict[str, dict], unknown: list[str], live: set[str]
     ) -> None:
+        # The allow list came back smaller than we left it, which means stored
+        # data was lost rather than devices being removed on purpose. Enforcing
+        # now would block everyone who is missing from it.
+        if self.store.dropped:
+            self.drop_blocked = True
+            if not self._drop_logged:
+                _LOGGER.error(
+                    "allow list holds %s entries but %s were saved - refusing to "
+                    "enforce. Restore a backup, or call "
+                    "unifi_allowlist.accept_list_size if the smaller list is "
+                    "correct",
+                    len(self.store.allowed),
+                    self.store.high_water,
+                )
+                self._drop_logged = True
+            return
+
+        self.drop_blocked = False
+        if self._drop_logged:
+            _LOGGER.warning("allow list size looks sane again - enforcing")
+            self._drop_logged = False
+
         guard = int(self._opt(CONF_MIN_LIST_GUARD, DEFAULT_MIN_LIST_GUARD))
         if guard and len(self.store.allowed) < guard:
             self.guard_blocked = True
@@ -937,6 +961,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             refresh=False,
             adopt_blocks=bool(self._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)),
         )
+
+    async def async_accept_list_size(self) -> int:
+        """Take the current allow list as correct, clearing the drop guard."""
+        size = await self.store.async_accept_size()
+        self.drop_blocked = False
+        self._drop_logged = False
+        _LOGGER.warning("accepted an allow list of %s entries as the new normal", size)
+        await self.async_request_refresh()
+        return size
 
     async def async_unblock_untracked(self) -> int:
         """Unblock devices the controller blocks but we have no record of.

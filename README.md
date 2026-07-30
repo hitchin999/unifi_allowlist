@@ -193,18 +193,31 @@ The match is over **wireless clients only**. Wired clients are outside this
 integration's scope everywhere else and are never adopted or blocked here, so
 UniFi's blocked count includes any wired blocks that this will not touch.
 
-## The minimum allow list size
+## Protection against a lost allow list
 
-Enforcement refuses to run while the allow list is smaller than **Minimum allow
-list size** (25 by default, 0 disables it). It is a dead man's switch: if
-storage fails to load, an import never ran, or somebody clears the list, then
-without it every device on the network becomes "unknown" and gets blocked at
-once. On a camp network that is a very bad afternoon.
+Enforcement blocks whatever is not on the allow list, so a list that comes back
+empty or truncated would block the entire network. Two guards, and neither
+cares how many devices you have:
 
-Set it a little under the number of devices you expect on that site — a site
-with a dozen devices should not carry a minimum of 25, or it will never enforce
-anything. The panel shows a red banner naming both numbers whenever the guard is
-holding enforcement back.
+**Lost data.** The allow list's high-water mark is kept in its own storage file.
+Every removal you make through the integration lowers the mark as it goes, so a
+gap between the mark and the list can only mean stored data came back smaller
+than it was left. Lose 91 entries and drop to 10 and nothing is blocked; run a
+five-device house and remove two and nothing happens. If the smaller list is
+genuinely correct — you edited storage by hand, say — call
+`unifi_allowlist.accept_list_size` to make it the new normal. Restoring a
+backup is the usual answer.
+
+**Too many at once.** Separately, if more unknown devices appear in a single
+poll than **Maximum blocks per run** (10 by default), nothing is blocked and you
+get a warning. That covers the sudden case, at any size.
+
+**Minimum allow list size** is a third, optional hard floor and is **off** by
+default. A fixed number fits a large site far better than a small one, and the
+guards above catch what it was aimed at.
+
+Whenever a guard is holding enforcement back the panel shows a red banner naming
+the actual numbers, so it is never silently doing nothing.
 
 ## Staying in sync with the controller
 
