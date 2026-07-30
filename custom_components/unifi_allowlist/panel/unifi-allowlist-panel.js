@@ -1062,6 +1062,15 @@ class UnifiAllowlistPanel extends HTMLElement {
   connectedCallback() {
     this._timer = setInterval(() => this._load(), REFRESH_MS);
     window.addEventListener("popstate", this._boundPop);
+    // Mobile browsers suspend timers in the background, so returning to the
+    // app can otherwise show data from whenever it was last foregrounded.
+    this._boundWake =
+      this._boundWake ||
+      (() => {
+        if (document.visibilityState === "visible") this._load();
+      });
+    document.addEventListener("visibilitychange", this._boundWake);
+    window.addEventListener("focus", this._boundWake);
     window.setTimeout(() => this._ensureBaseHist(), 0);
   }
 
@@ -1069,6 +1078,10 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (this._timer) clearInterval(this._timer);
     if (this._toastTimer) clearTimeout(this._toastTimer);
     window.removeEventListener("popstate", this._boundPop);
+    if (this._boundWake) {
+      document.removeEventListener("visibilitychange", this._boundWake);
+      window.removeEventListener("focus", this._boundWake);
+    }
   }
 
   static _savedSite() {
@@ -1613,6 +1626,14 @@ class UnifiAllowlistPanel extends HTMLElement {
       bannerHtml +=
         `<div class="banner err"><ha-icon icon="mdi:alert-circle-outline"></ha-icon>` +
         `<span>${this._esc(this._error)}</span></div>`;
+    }
+    if (d && d.guard_blocked) {
+      bannerHtml +=
+        `<div class="banner err"><ha-icon icon="mdi:shield-off-outline"></ha-icon>` +
+        `<span>Not blocking anything: the allow list has ${d.allowed.length} ` +
+        `device${d.allowed.length === 1 ? "" : "s"} and the safety minimum is ` +
+        `${d.guard_min}. Approve more devices, or lower the minimum in the ` +
+        `integration options.</span></div>`;
     }
     if (d && d.breaker) {
       bannerHtml +=

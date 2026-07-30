@@ -509,5 +509,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "scoped_ssids": coord.enforced_ssids,
                 "breaker": bool((coord.data or {}).get("breaker")),
                 "error": coord.last_error,
+                "guard_blocked": coord.guard_blocked,
+                "guard_min": coord.guard_min,
             }
         )

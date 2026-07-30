@@ -33,6 +33,10 @@ DEFAULT_DENY_UNNAMED = False
 # Refuse a runaway adoption; a first sync with many manual blocks should go
 # through the service, where it can be previewed.
 ADOPT_LIMIT = 25
+# An allowed device showing as blocked is usually our own unblock not having
+# landed yet. Only after this many consecutive polls is it treated as somebody
+# deliberately blocking it in the UniFi UI.
+ADOPT_ALLOWED_AFTER = 3
 DEFAULT_MAX_PER_RUN = 10
 DEFAULT_MIN_LIST_GUARD = 25
 DEFAULT_NOTIFY_GAP = 1.0

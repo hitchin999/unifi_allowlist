@@ -193,6 +193,19 @@ The match is over **wireless clients only**. Wired clients are outside this
 integration's scope everywhere else and are never adopted or blocked here, so
 UniFi's blocked count includes any wired blocks that this will not touch.
 
+## The minimum allow list size
+
+Enforcement refuses to run while the allow list is smaller than **Minimum allow
+list size** (25 by default, 0 disables it). It is a dead man's switch: if
+storage fails to load, an import never ran, or somebody clears the list, then
+without it every device on the network becomes "unknown" and gets blocked at
+once. On a camp network that is a very bad afternoon.
+
+Set it a little under the number of devices you expect on that site — a site
+with a dozen devices should not carry a minimum of 25, or it will never enforce
+anything. The panel shows a red banner naming both numbers whenever the guard is
+holding enforcement back.
+
 ## Staying in sync with the controller
 
 Blocks made by hand in the UniFi UI are invisible to this integration by

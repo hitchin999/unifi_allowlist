@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import UnifiClient, UnifiError
 from .const import (
     ACTION_PREFIX,
+    ADOPT_ALLOWED_AFTER,
     ADOPT_LIMIT,
     CONF_ADOPT_BLOCKS,
     CONF_DENY_NAMES,
@@ -74,6 +75,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._breaker_tripped = False
         self._controller_name: str | None = None
         self.suppressed_last_run = 0
+        self.guard_blocked = False
+        self._guard_logged = False
+        self._notify_backlog: set[str] = set()
+        self._blocked_streak: dict[str, int] = {}
 
         super().__init__(
             hass,
@@ -99,6 +104,11 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         return self.entry.title or self.site or "UniFi"
 
     # --- name based suppression -------------------------------------------
+
+    @property
+    def guard_min(self) -> int:
+        """Allow-list size below which nothing is enforced."""
+        return int(self._opt(CONF_MIN_LIST_GUARD, DEFAULT_MIN_LIST_GUARD))
 
     @property
     def deny_name_patterns(self) -> list[str]:
@@ -186,6 +196,43 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         targets = self.notify_targets
         return targets[0] if targets else None
 
+    def _missing_targets(self) -> list[str]:
+        """Configured notify services Home Assistant has not registered yet.
+
+        After a restart the mobile_app integration can come up later than this
+        one, so a prompt sent in that window is thrown away by the bus.
+        """
+        return [
+            t
+            for t in self.notify_targets
+            if not self.hass.services.has_service("notify", t)
+        ]
+
+    async def _flush_notify_backlog(self) -> None:
+        """Re-send prompts that were lost because notify was not ready."""
+        if not self._notify_backlog or self._missing_targets():
+            return
+        macs = [m for m in sorted(self._notify_backlog) if m in self.store.pending]
+        self._notify_backlog.clear()
+        if not macs:
+            return
+        _LOGGER.warning("re-sending %d prompt(s) that notify missed", len(macs))
+        for mac in macs:
+            info = self.store.pending.get(mac) or {}
+            await self._notify_device(
+                mac,
+                info.get("name", "no name"),
+                info.get("ssid", "?"),
+                "?",
+                "waiting for you",
+                blocked=True,
+                ip=info.get("ip", ""),
+                ap=info.get("ap", ""),
+            )
+            await asyncio.sleep(
+                float(self._opt(CONF_NOTIFY_GAP, DEFAULT_NOTIFY_GAP))
+            )
+
     async def _async_send(self, payload: dict) -> None:
         """Fan a notify payload out to every configured target."""
         for target in self.notify_targets:
@@ -222,6 +269,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             await self._refresh_controller_name()
 
         await self._auto_sync()
+        await self._flush_notify_backlog()
 
         if not self.wlan_names:
             await self._refresh_wlans()
@@ -400,12 +448,27 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     ) -> None:
         guard = int(self._opt(CONF_MIN_LIST_GUARD, DEFAULT_MIN_LIST_GUARD))
         if guard and len(self.store.allowed) < guard:
-            _LOGGER.error(
-                "allow list has only %s entries (minimum %s) - refusing to enforce",
+            self.guard_blocked = True
+            # Once per transition. This fires on every poll otherwise, and 80
+            # copies of the same line buries whatever else went wrong.
+            if not self._guard_logged:
+                _LOGGER.error(
+                    "allow list has only %s entries (minimum %s) - refusing to "
+                    "enforce until it grows or the minimum is lowered in options",
+                    len(self.store.allowed),
+                    guard,
+                )
+                self._guard_logged = True
+            return
+
+        self.guard_blocked = False
+        if self._guard_logged:
+            _LOGGER.warning(
+                "allow list is back above the minimum (%s of %s) - enforcing again",
                 len(self.store.allowed),
                 guard,
             )
-            return
+            self._guard_logged = False
 
         # Previously denied: re-block, but only while actually connected.
         for mac in [m for m in unknown if self.store.is_denied(m) and m in live]:
@@ -528,6 +591,12 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         ap: str = "",
     ) -> None:
         if not self.notify_targets:
+            return
+
+        if self._missing_targets():
+            # Hold it rather than firing into a bus that will drop it.
+            self._notify_backlog.add(mac)
+            _LOGGER.debug("notify not ready, queued prompt for %s", mac)
             return
 
         data = self._base_data()
@@ -757,15 +826,32 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             names[mac] = rec.get("name") or rec.get("hostname") or ""
 
         ours = set(self.store.denied) | set(self.store.pending)
-        adopt = sorted(on_controller - ours) if adopt_blocks else []
+        allowed_now = set(self.store.allowed)
+
+        # An allowed device sitting blocked on the controller is ambiguous: it
+        # is either an admin blocking it by hand, or our own unblock not having
+        # taken effect yet. Those look identical in one snapshot, so the allow
+        # decision wins immediately and adoption needs the block to persist.
+        held = sorted(allowed_now & on_controller)
+        persistent = [
+            m
+            for m in held
+            if self._blocked_streak.get(m, 0) + 1 >= ADOPT_ALLOWED_AFTER
+        ]
+        restore = [m for m in held if m not in persistent]
+
+        adopt = sorted(on_controller - ours - allowed_now) if adopt_blocks else []
+        if adopt_blocks and persistent:
+            adopt = sorted(set(adopt) | set(persistent))
+
         # Held blocked here, free there. Waiting devices count: they are blocked
         # pending a verdict, so a lost block is just as wrong for them.
         drifted = sorted((ours & set(names)) - on_controller)
 
-        from_allowed = [m for m in adopt if m in self.store.allowed]
         result = {
             "adopted": len(adopt),
-            "from_allowed": len(from_allowed),
+            "from_allowed": len(persistent) if adopt_blocks else 0,
+            "restored": len(restore),
             "reblocked": len(drifted) if reblock else 0,
             "dry_run": dry_run,
             "macs": adopt[:50],
@@ -784,20 +870,43 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if dry_run:
             _LOGGER.warning(
                 "sync preview: would deny %d device(s) blocked in UniFi "
-                "(%d currently allowed here), and re-block %d denied device(s) "
-                "that are no longer blocked there",
+                "(%d of them allowed here and blocked for %d+ polls), unblock "
+                "%d allowed device(s), and re-block %d device(s) held blocked "
+                "here but free there",
                 len(adopt),
-                len(from_allowed),
+                result["from_allowed"],
+                ADOPT_ALLOWED_AFTER,
+                len(restore),
                 len(drifted) if reblock else 0,
             )
             return result
 
+        # Streaks only advance on a real run, so previews never influence them.
+        for mac in held:
+            self._blocked_streak[mac] = self._blocked_streak.get(mac, 0) + 1
+        for mac in list(self._blocked_streak):
+            if mac not in on_controller:
+                del self._blocked_streak[mac]
+
+        # Put access back for allowed devices whose block has not persisted.
+        for mac in restore:
+            await self._safe_unblock(mac)
+        if restore:
+            _LOGGER.info(
+                "sync: restored access for %d allowed device(s) found blocked",
+                len(restore),
+            )
+        for mac in persistent:
+            self._blocked_streak.pop(mac, None)
+
         if adopt:
             await self.store.async_deny_many(adopt, source="unifi")
             _LOGGER.warning(
-                "sync: adopted %d block(s) from UniFi, %d of which were allowed here",
+                "sync: adopted %d block(s) from UniFi, %d of which were allowed "
+                "here and had stayed blocked for %d consecutive polls",
                 len(adopt),
-                len(from_allowed),
+                len(persistent),
+                ADOPT_ALLOWED_AFTER,
             )
 
         if reblock and drifted:
@@ -805,13 +914,14 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 await self._safe_block(mac)
             _LOGGER.warning("sync: re-blocked %d denied device(s)", len(drifted))
 
-        if adopt or (reblock and drifted):
+        if adopt or restore or (reblock and drifted):
             if refresh:
                 await self.async_request_refresh()
             await self._notify_plain(
                 "Wifi access",
                 f"Synced with UniFi: {len(adopt)} newly denied, "
-                f"{len(drifted) if reblock else 0} re-blocked",
+                f"{len(drifted) if reblock else 0} re-blocked, "
+                f"{len(restore)} allowed device(s) unblocked again",
                 icon="mdi:sync",
             )
         return result
