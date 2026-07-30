@@ -53,6 +53,22 @@ from .store import DeviceStore
 _LOGGER = logging.getLogger(__name__)
 
 
+def _serves_wifi(dev: dict) -> bool:
+    """Whether a UniFi device actually broadcasts wifi to clients.
+
+    The device list is everything on the site - switches, gateways, building
+    bridges - so counting it as "access points" overstates things badly. An
+    access point is either typed as one, or has radios that serve clients. A
+    UBB has radios, but they are a point-to-point link, not an SSID.
+    """
+    dtype = str(dev.get("type") or "").lower()
+    if dtype == "uap":
+        return True
+    if dtype in ("ubb", "usw", "ugw", "usg"):
+        return False
+    return bool(dev.get("radio_table"))
+
+
 class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     """Polls the controller, decides what is unknown, and acts on it."""
 
@@ -70,6 +86,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self.last_error: str | None = None
         self.wlan_names: dict[str, str] = {}
         self.ap_names: dict[str, str] = {}
+        self.wireless_aps: dict[str, str] = {}
         self._devices_stamp = 0.0
         self.online: list[dict] = []
         self._breaker_tripped = False
@@ -375,13 +392,19 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return
 
         names = {}
+        radios = {}
         for dev in devices:
             mac = str(dev.get("mac", "")).lower()
             if not mac:
                 continue
-            names[mac] = dev.get("name") or dev.get("model") or mac
+            label = dev.get("name") or dev.get("model") or mac
+            # Every device, so an unexpected uplink still resolves to a name.
+            names[mac] = label
+            if _serves_wifi(dev):
+                radios[mac] = label
         if names:
             self.ap_names = names
+            self.wireless_aps = radios
 
     def _ap_of(self, rec: dict) -> str:
         """Live records give the AP MAC. Lookback records give its name."""

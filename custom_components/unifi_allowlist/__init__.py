@@ -513,7 +513,9 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "sites": sites,
                 "enforcing": coord.enforcing,
                 "ssids": sorted(n for n in coord.wlan_names.values() if n),
-                "aps": sorted(set(coord.ap_names.values())),
+                # Access points only. ap_names covers every UniFi device on the
+                # site and would count switches and gateways too.
+                "aps": sorted(set(coord.wireless_aps.values())),
                 "scoped_ssids": coord.enforced_ssids,
                 "breaker": bool((coord.data or {}).get("breaker")),
                 "error": coord.last_error,
