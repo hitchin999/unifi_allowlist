@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.10.0-4";
+const PANEL_VERSION = "1.10.2";
 const MAX_ROWS = 300;
 // Each row carries half a dozen <ha-icon> custom elements, so a few hundred of
 // them is thousands of upgrades and the whole panel goes sticky. Draw a screen

@@ -218,6 +218,23 @@ The match is over **wireless clients only**. Wired clients are outside this
 integration's scope everywhere else and are never adopted or blocked here, so
 UniFi's blocked count includes any wired blocks that this will not touch.
 
+## Polling
+
+Two schedules, because the two calls cost very different amounts. **Check every**
+governs how often the connected-client list is read, and that is the only thing
+detection needs — so it can be turned down to a few seconds to shorten the
+window before an unknown device is blocked. The full client list, which is far
+larger and is needed only for the lookback merge and the controller sync, is
+refreshed once a minute regardless.
+
+A device still gets a moment of access: it associates and takes an address
+before anything can see it, so the window shrinks with the interval but never
+reaches zero. Refusing association outright is a job for UniFi's per-WLAN MAC
+filter, not for this.
+
+If the big refresh fails but the connected list succeeds, the poll carries on
+with the previous copy and logs how old it is, rather than failing outright.
+
 ## Protection against a lost allow list
 
 Enforcement blocks whatever is not on the allow list, so a list that comes back

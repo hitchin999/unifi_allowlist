@@ -35,11 +35,14 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SSIDS,
     DEFAULT_ADOPT_BLOCKS,
+    KNOWN_REFRESH,
     LAST_SEEN_CAP,
+    PANEL_URL_PATH,
     LAST_SEEN_KEEP,
     DEFAULT_DENY_UNNAMED,
     DEFAULT_SMS_DIGEST,
     EVENT_DECISION,
+    HASH_PREFIX,
     SMS_DOMAIN,
     SMS_ENABLED,
     SMS_SERVICE,
@@ -460,18 +463,40 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
     # --- main loop ---------------------------------------------------------
 
+    @property
+    def known_refresh(self) -> float:
+        """How stale the full client list may get. Never faster than the poll."""
+        return max(
+            KNOWN_REFRESH,
+            float(self._opt(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
+        )
+
     async def _async_update_data(self) -> dict:
+        # Who is connected right now. Small, and the only thing detection needs,
+        # so it runs on every poll however short the interval is.
         try:
-            active, known = await asyncio.gather(
-                self.client.active_clients(), self.client.known_clients()
-            )
+            active = await self.client.active_clients()
         except UnifiError as err:
             self.last_error = str(err)
             raise UpdateFailed(str(err)) from err
 
+        # Everything the controller has ever seen. Big, and only needed for the
+        # lookback merge and the sync, both of which tolerate a minute of age.
+        try:
+            known = await self._async_known_clients(self.known_refresh)
+        except UnifiError as err:
+            if not self._known_cache:
+                self.last_error = str(err)
+                raise UpdateFailed(str(err)) from err
+            _LOGGER.warning(
+                "client list refresh failed, carrying on with the copy from "
+                "%.0fs ago: %s",
+                time.time() - self._known_cache_at,
+                err,
+            )
+            known = self._known_cache
+
         self.last_error = None
-        self._known_cache = known or []
-        self._known_cache_at = time.time()
 
         if self._controller_name is None:
             await self._refresh_controller_name()
@@ -845,9 +870,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     # --- notifications -----------------------------------------------------
 
     def _base_data(self) -> dict:
+        # Tapping the body of the notification, rather than one of its action
+        # buttons, opens the panel on the waiting tab. Android reads
+        # clickAction, iOS reads url, so both are sent.
+        target = f"/{PANEL_URL_PATH}{HASH_PREFIX}pending"
         return {
             "channel": self._opt(CONF_CHANNEL, DEFAULT_CHANNEL),
             "group": self._opt(CONF_GROUP, DEFAULT_GROUP),
+            "clickAction": target,
+            "url": target,
         }
 
     async def _notify_plain(
@@ -988,7 +1019,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.store.async_set_label(mac, name)
         await self.async_request_refresh()
 
-    async def _async_known_clients(self, max_age: float = 90.0) -> list[dict]:
+    async def _async_known_clients(self, max_age: float = KNOWN_REFRESH) -> list[dict]:
         """Client list, from the last poll when it is recent enough."""
         if self._known_cache and time.time() - self._known_cache_at <= max_age:
             return self._known_cache
