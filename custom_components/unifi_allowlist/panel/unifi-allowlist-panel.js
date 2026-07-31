@@ -8,7 +8,14 @@
  */
 
 const REFRESH_MS = 10000;
+// Bumped whenever this file changes, so the loaded build can be identified
+// from devtools: inspect the panel element and read data-panel-version.
+const PANEL_VERSION = "1.10.0-4";
 const MAX_ROWS = 300;
+// Each row carries half a dozen <ha-icon> custom elements, so a few hundred of
+// them is thousands of upgrades and the whole panel goes sticky. Draw a screen
+// or two, then extend as the list is scrolled.
+const PAGE_ROWS = 40;
 
 const TABS = ["pending", "online", "allowed", "denied"];
 const HASH_PREFIX = "#ual-";
@@ -134,6 +141,10 @@ const STYLES = `
       --ua-glass-shadow: 0 12px 34px rgba(0,0,0,.44), inset 0 1px 0 rgba(255,255,255,.10);
       --ua-pop-shadow: 0 18px 52px rgba(0,0,0,.55);
       --ua-overlay: rgba(0,0,0,.54);
+    /* Footprint of the floating tab bar: its own height plus the gap beneath
+       it. The list stops this far above the bottom, so nothing scrolls behind
+       the bar. */
+    --ua-tabbar: 96px;
   }
 
   * { box-sizing: border-box; }
@@ -488,6 +499,11 @@ const STYLES = `
 
   /* ---------- list ---------- */
 
+  .sentinel {
+    display: grid; place-items: center; padding: 18px 0 26px;
+    color: var(--ua-dim);
+  }
+  .sentinel ha-icon { --mdc-icon-size: 22px; width: 22px; height: 22px; }
   .list-scroll {
     flex: 1 1 auto;
     min-height: 0;
@@ -949,12 +965,25 @@ const STYLES = `
     .tools { padding: 10px 12px 0; }
     .search { height: 44px; border-radius: 15px; }
     .filter-btn { height: 44px; border-radius: 15px; padding: 0 12px; }
-    .list-scroll { padding: 10px 12px 96px; }
+    .sentinel {
+    display: grid; place-items: center; padding: 18px 0 26px;
+    color: var(--ua-dim);
+  }
+  .sentinel ha-icon { --mdc-icon-size: 22px; width: 22px; height: 22px; }
+    /* Bottom padding was not enough: it let the last row be scrolled clear,
+       but every row still slid under the bar on the way past. Shortening the
+       scroll area instead means the list simply stops above it, and nothing is
+       ever behind the glass. env() covers the gesture bar. */
+    .list-scroll {
+      padding: 10px 12px 12px;
+      margin-bottom: calc(var(--ua-tabbar, 96px) + env(safe-area-inset-bottom));
+    }
 
     /* floating glass tab bar, pinned and always visible */
     .tabs {
       position: absolute;
-      left: 10px; right: 10px; bottom: 12px;
+      left: 10px; right: 10px;
+      bottom: calc(12px + env(safe-area-inset-bottom));
       z-index: 37;
       display: grid; grid-template-columns: repeat(4, 1fr);
       gap: 2px; padding: 6px;
@@ -1158,14 +1187,14 @@ class UnifiAllowlistPanel extends HTMLElement {
   _loadPrefs() {
     if (this._sort !== undefined) return;
     this._sort = "name";
-    this._filters = { conn: [], ssid: [], ap: [], band: [] };
+    this._filters = { conn: [], ssid: [], ap: [], band: [], vendor: [] };
     try {
       const raw = window.localStorage.getItem("ual_view");
       if (raw) {
         const saved = JSON.parse(raw) || {};
         if (typeof saved.sort === "string") this._sort = saved.sort;
         if (saved.filters && typeof saved.filters === "object") {
-          for (const k of ["conn", "ssid", "ap", "band"]) {
+          for (const k of ["conn", "ssid", "ap", "band", "vendor"]) {
             if (Array.isArray(saved.filters[k])) this._filters[k] = saved.filters[k];
           }
         }
@@ -1223,6 +1252,7 @@ class UnifiAllowlistPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    this.dataset.panelVersion = PANEL_VERSION;
     this._timer = setInterval(() => this._load(), REFRESH_MS);
     window.addEventListener("popstate", this._boundPop);
     // Mobile browsers suspend timers in the background, so returning to the
@@ -1520,7 +1550,7 @@ class UnifiAllowlistPanel extends HTMLElement {
             <ha-icon icon="mdi:magnify"></ha-icon>
             <input id="search" type="search" autocomplete="off" spellcheck="false"
                    aria-label="Search devices"
-                   placeholder="Search name, MAC, IP, SSID or AP">
+                   placeholder="Search name, MAC, IP, SSID, AP or maker">
             <button class="clear-btn" id="clear" aria-label="Clear search" title="Clear">
               <ha-icon icon="mdi:close-circle"></ha-icon>
             </button>
@@ -1599,8 +1629,9 @@ class UnifiAllowlistPanel extends HTMLElement {
     root.getElementById("sheet-x").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-done").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-clear").addEventListener("click", () => {
-      this._filters = { conn: [], ssid: [], ap: [], band: [] };
+      this._filters = { conn: [], ssid: [], ap: [], band: [], vendor: [] };
       this._sort = "name";
+      this._resetPaging();
       this._savePrefs();
       this._renderSheet();
       this._renderList();
@@ -1613,6 +1644,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       const value = btn.dataset.value;
       if (group === "sort") this._sort = value;
       else this._toggleFilter(group, value);
+      this._resetPaging();
       this._savePrefs();
       this._renderSheet();
       this._renderList();
@@ -1657,12 +1689,14 @@ class UnifiAllowlistPanel extends HTMLElement {
     const search = root.getElementById("search");
     search.addEventListener("input", (ev) => {
       this._query = ev.target.value.trim().toLowerCase();
+      this._resetPaging();
       root.getElementById("searchbox").classList.toggle("has-text", !!ev.target.value);
       this._renderList();
     });
     root.getElementById("clear").addEventListener("click", () => {
       search.value = "";
       this._query = "";
+      this._resetPaging();
       root.getElementById("searchbox").classList.remove("has-text");
       search.focus();
       this._renderList();
@@ -1713,6 +1747,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (!TABS.includes(tab) || tab === this._tab) return;
     this._tab = tab;
     this._confirmBulk = false;
+    this._resetPaging();
     this._pushTabHist(tab);
     this._render();
     const list = this.shadowRoot.getElementById("list");
@@ -1749,6 +1784,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
     this._entryId = id;
     UnifiAllowlistPanel._saveSite(id);
+    this._resetPaging();
     // Anything half-finished belongs to the site we just left.
     this._editing = null;
     this._busy = {};
@@ -2140,6 +2176,15 @@ class UnifiAllowlistPanel extends HTMLElement {
       copy.sort(
         (a, b) => (a.ap || "\uffff").localeCompare(b.ap || "\uffff") || byName(a, b)
       );
+    } else if (key === "vendor") {
+      // Randomised MACs report no vendor, so they collect at the end rather
+      // than at the top where they would bury everything identifiable.
+      copy.sort(
+        (a, b) =>
+          (a.vendor || "\uffff").localeCompare(b.vendor || "\uffff", undefined, {
+            sensitivity: "base",
+          }) || byName(a, b)
+      );
     } else if (key === "mac") {
       copy.sort((a, b) => (a.mac || "").localeCompare(b.mac || ""));
     } else if (key === "name_desc") {
@@ -2175,6 +2220,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (on("ssid") && !f.ssid.includes(r.ssid)) return false;
     if (on("ap") && !f.ap.includes(r.ap)) return false;
     if (on("band") && !f.band.includes(r.band)) return false;
+    if (on("vendor") && !f.vendor.includes(r.vendor)) return false;
     return true;
   }
 
@@ -2185,7 +2231,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   _activeCount() {
     const f = this._filters || {};
-    return ["conn", "ssid", "ap", "band"].reduce(
+    return ["conn", "ssid", "ap", "band", "vendor"].reduce(
       (n, g) => n + ((f[g] || []).length ? 1 : 0),
       0
     );
@@ -2237,6 +2283,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       ["seen", "Last seen", "mdi:clock-outline"],
       ["ip", "IP address", "mdi:ip-network-outline"],
       ["ap", "Access point", "mdi:router-wireless"],
+      ["vendor", "Made by", "mdi:factory"],
       ["mac", "MAC address", "mdi:identifier"],
     ];
   }
@@ -2297,7 +2344,8 @@ class UnifiAllowlistPanel extends HTMLElement {
       section("Status", connHtml) +
       section("Network", uniq("ssid").length > 1 ? listFor("ssid") : "") +
       section("Access point", uniq("ap").length > 1 ? listFor("ap") : "") +
-      section("Band", uniq("band").length > 1 ? listFor("band") : "");
+      section("Band", uniq("band").length > 1 ? listFor("band") : "") +
+      section("Made by", uniq("vendor").length > 1 ? listFor("vendor") : "");
 
     const dot = root.getElementById("filter-dot");
     if (dot) {
@@ -2375,6 +2423,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         label: r.label,
         ip: r.ip,
         ap: r.ap || "",
+        vendor: r.vendor || "",
         ssid: r.ssid || "",
         band: r.band || "",
         last_seen: r.last_seen || 0,
@@ -2385,6 +2434,7 @@ class UnifiAllowlistPanel extends HTMLElement {
           r.ssid ? { v: r.ssid, cls: "net", icon: "mdi:wifi" } : null,
           r.in_scope ? null : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
           r.live ? null : UnifiAllowlistPanel._lastSeenChip(r.last_seen),
+          r.vendor ? { v: r.vendor, cls: "off", icon: "mdi:factory" } : null,
         ],
         fields: [
           { v: r.mac, mono: true, icon: "mdi:identifier" },
@@ -2405,6 +2455,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         label: p.label,
         ip: p.ip,
         ap: p.ap || "",
+        vendor: p.vendor || "",
         ssid: p.ssid || "",
         band: p.band || "",
         last_seen: p.last_seen || 0,
@@ -2417,6 +2468,7 @@ class UnifiAllowlistPanel extends HTMLElement {
             ? { v: "still connected", cls: "unknown", icon: "mdi:lan-connect" }
             : { v: "gone offline", cls: "off", icon: "mdi:lan-disconnect" },
           p.live ? null : UnifiAllowlistPanel._lastSeenChip(p.last_seen),
+          p.vendor ? { v: p.vendor, cls: "off", icon: "mdi:factory" } : null,
         ],
         fields: [
           { v: p.mac, mono: true, icon: "mdi:identifier" },
@@ -2436,6 +2488,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       label: e.label,
       ip: e.ip,
       ap: e.ap || "",
+      vendor: e.vendor || "",
       ssid: "",
       band: "",
       last_seen: e.last_seen || 0,
@@ -2451,6 +2504,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         liveMacs.has(e.mac)
           ? null
           : UnifiAllowlistPanel._lastSeenChip(e.last_seen),
+        e.vendor ? { v: e.vendor, cls: "off", icon: "mdi:factory" } : null,
       ],
       fields: [
         { v: e.mac, mono: true, icon: "mdi:identifier" },
@@ -2501,6 +2555,8 @@ class UnifiAllowlistPanel extends HTMLElement {
         (r) =>
           r.mac.includes(q) ||
           (r.name || "").toLowerCase().includes(q) ||
+          (r.vendor || "").toLowerCase().includes(q) ||
+          (r.ap || "").toLowerCase().includes(q) ||
           (r.fields || []).some((f) => (f.v || "").toLowerCase().includes(q)) ||
           (r.chips || []).some((c) => c && (c.v || "").toLowerCase().includes(q))
       );
@@ -2522,14 +2578,49 @@ class UnifiAllowlistPanel extends HTMLElement {
       return;
     }
 
-    const shown = rows.slice(0, MAX_ROWS);
+    const cap = Math.min(rows.length, MAX_ROWS);
+    // Keep whatever was already on screen, so a background refresh cannot
+    // yank the list back to the top of a long scroll.
+    this._page = Math.min(Math.max(this._page || PAGE_ROWS, PAGE_ROWS), cap);
+    const shown = rows.slice(0, this._page);
+    this._pageRows = rows;
 
     list.innerHTML =
       this._bulkHtml(rows) +
       shown.map((r) => this._rowHtml(r)).join("") +
-      (rows.length > MAX_ROWS
+      (this._page < cap
+        ? `<div class="sentinel" id="sentinel"><ha-icon icon="mdi:loading" class="spin"></ha-icon></div>`
+        : rows.length > MAX_ROWS
         ? `<div class="more">Showing ${MAX_ROWS} of ${rows.length}. Search to narrow it down.</div>`
         : "");
+
+    this._watchSentinel();
+  }
+
+  /* Extends the list as its foot comes into view. An observer rather than a
+     scroll handler, so nothing runs while the list sits still. */
+  _watchSentinel() {
+    const root = this.shadowRoot;
+    const sentinel = root.getElementById("sentinel");
+    if (this._io) this._io.disconnect();
+    if (!sentinel) return;
+    const scroller = root.getElementById("list");
+    this._io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        const cap = Math.min((this._pageRows || []).length, MAX_ROWS);
+        if (this._page >= cap) return;
+        this._page = Math.min(this._page + PAGE_ROWS, cap);
+        this._renderList();
+      },
+      { root: scroller, rootMargin: "600px 0px" }
+    );
+    this._io.observe(sentinel);
+  }
+
+  /* Anything that changes what the list contains starts it from the top. */
+  _resetPaging() {
+    this._page = PAGE_ROWS;
   }
 
   _bulkHtml(rows) {

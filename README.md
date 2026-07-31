@@ -160,6 +160,17 @@ Light and dark variants are included. Note that the HACS dashboard does not yet 
 
 MIT
 
+## What kind of device is it
+
+The controller resolves each MAC's manufacturer itself and returns it on the
+client record, so the vendor is shown as a chip without any external lookup
+service, API key or rate limit — and no MAC ever leaves your network. It is
+searchable and filterable under **Made by**.
+
+Bear in mind it identifies the maker of the wifi chipset, not the product, and
+a phone using a private wifi address reports no usable vendor at all, because
+the address was invented rather than assigned.
+
 ## Sorting and filtering
 
 **Sort & filter** beside the search box opens a sheet: sort by name either way,

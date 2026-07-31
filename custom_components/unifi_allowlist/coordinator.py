@@ -110,6 +110,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # Newest last_seen per MAC, so a device that drops off the controller's
         # lookback window still shows when it was last around.
         self.last_seen: dict[str, int] = {}
+        # Last access point and vendor per MAC, so a device that is not
+        # connected still says where it was and what it probably is.
+        self.last_ap: dict[str, str] = {}
+        self.vendors: dict[str, str] = {}
         self._devices_stamp = 0.0
         self.online: list[dict] = []
         self._breaker_tripped = False
@@ -499,6 +503,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             stamp = int(rec.get("last_seen") or 0)
             if stamp and stamp > self.last_seen.get(mac, 0):
                 self.last_seen[mac] = stamp
+            self._remember_facts(mac, rec)
             if stamp < cutoff:
                 continue
             seen[mac] = dict(rec)
@@ -629,12 +634,24 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return True
         return self._ssid_of(rec) in scope
 
+    def _remember_facts(self, mac: str, rec: dict) -> None:
+        """Hold on to the bits that outlive a connection."""
+        ap = self._ap_of(rec)
+        if ap:
+            self.last_ap[mac] = ap
+        vendor = str(rec.get("oui") or "").strip()
+        if vendor:
+            self.vendors[mac] = vendor
+
     def _trim_last_seen(self) -> None:
         """Keep the map from growing forever on a site full of random MACs."""
         if len(self.last_seen) <= LAST_SEEN_CAP:
             return
         keep = sorted(self.last_seen.items(), key=lambda kv: kv[1], reverse=True)
         self.last_seen = dict(keep[:LAST_SEEN_KEEP])
+        alive = set(self.last_seen)
+        self.last_ap = {k: v for k, v in self.last_ap.items() if k in alive}
+        self.vendors = {k: v for k, v in self.vendors.items() if k in alive}
         _LOGGER.debug("trimmed last-seen map to %d entries", len(self.last_seen))
 
     def _last_seen_of(self, mac: str, rec: dict, is_live: bool) -> int:
@@ -673,6 +690,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             "blocked": bool(rec.get("blocked")),
             "live": is_live,
             "last_seen": self._last_seen_of(mac, rec, is_live),
+            "vendor": str(rec.get("oui") or "") or self.vendors.get(mac, ""),
             "in_scope": self._in_scope(rec),
             "status": status,
         }

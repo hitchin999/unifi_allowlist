@@ -505,6 +505,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
         }
         live_aps = {r["mac"]: r["ap"] for r in coord.online if r.get("ap")}
         seen_at = coord.last_seen
+        last_ap = coord.last_ap
+        vendors = coord.vendors
 
         return self.json(
             {
@@ -522,6 +524,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "ssid": (info or {}).get("ssid", ""),
                         "first_seen": (info or {}).get("first_seen"),
                         "last_seen": seen_at.get(mac, 0),
+                        "vendor": vendors.get(mac, ""),
                         "live": mac in live_macs,
                     }
                     for mac, info in store.pending.items()
@@ -532,8 +535,9 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "name": store.name_for(mac) or live_names.get(mac, ""),
                         "label": store.label_for(mac),
                         "ip": live_ips.get(mac, ""),
-                        "ap": live_aps.get(mac, ""),
+                        "ap": live_aps.get(mac, "") or last_ap.get(mac, ""),
                         "last_seen": seen_at.get(mac, 0),
+                        "vendor": vendors.get(mac, ""),
                     }
                     for mac, info in store.allowed.items()
                 ],
@@ -546,8 +550,9 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "name": store.name_for(mac) or live_names.get(mac, ""),
                         "label": store.label_for(mac),
                         "ip": live_ips.get(mac, ""),
-                        "ap": live_aps.get(mac, ""),
+                        "ap": live_aps.get(mac, "") or last_ap.get(mac, ""),
                         "last_seen": seen_at.get(mac, 0),
+                        "vendor": vendors.get(mac, ""),
                         "review": False,
                     }
                     for mac, info in store.denied.items()
@@ -558,8 +563,11 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "name": store.name_for(mac) or live_names.get(mac, ""),
                         "label": store.label_for(mac),
                         "ip": (info or {}).get("ip") or live_ips.get(mac, ""),
-                        "ap": (info or {}).get("ap") or live_aps.get(mac, ""),
+                        "ap": (info or {}).get("ap")
+                        or live_aps.get(mac, "")
+                        or last_ap.get(mac, ""),
                         "last_seen": seen_at.get(mac, 0),
+                        "vendor": vendors.get(mac, ""),
                         "review": True,
                     }
                     for mac, info in store.pending.items()
