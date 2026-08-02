@@ -10,12 +10,14 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.10.2";
+const PANEL_VERSION = "1.11.1";
 const MAX_ROWS = 300;
-// Each row carries half a dozen <ha-icon> custom elements, so a few hundred of
-// them is thousands of upgrades and the whole panel goes sticky. Draw a screen
-// or two, then extend as the list is scrolled.
-const PAGE_ROWS = 40;
+// Each row carries seven <ha-icon> custom elements, and every one of those is a
+// element upgrade with its own shadow root. That is the whole cost of drawing
+// this list, so the first paint is deliberately small - about a screen - and
+// the rest is appended as the list is scrolled.
+const FIRST_ROWS = 14;
+const PAGE_ROWS = 24;
 
 const TABS = ["pending", "online", "allowed", "denied"];
 const HASH_PREFIX = "#ual-";
@@ -678,6 +680,68 @@ const STYLES = `
   .opt[aria-checked="true"] .box ha-icon { color: #fff; --mdc-icon-size: 16px; width: 16px; height: 16px; }
   .opt[aria-checked="false"] .box ha-icon { display: none; }
   .opt.radio .box { border-radius: 50%; }
+  .cfgrow {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px; border-top: 1px solid var(--ua-line); font-size: 15px;
+  }
+  .cfgrow:first-child { border-top: 0; }
+  .cfgrow .txt { flex: 1 1 auto; min-width: 0; }
+  .cfgrow .txt small {
+    display: block; margin-top: 2px; font-size: 12px; color: var(--ua-dim);
+    white-space: normal;
+  }
+  .cfgrow input[type="number"] {
+    flex: 0 0 auto; width: 92px; text-align: right;
+    font: inherit; font-size: 15px; padding: 8px 10px;
+    border-radius: 10px; border: 1px solid var(--ua-line);
+    background: var(--ua-bg); color: var(--ua-text);
+  }
+  .cfgrow .sw {
+    flex: 0 0 auto; width: 46px; height: 28px; border-radius: 999px;
+    border: 0; cursor: pointer; padding: 0; position: relative;
+    background: var(--ua-line); transition: background .15s ease;
+  }
+  .cfgrow .sw::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 22px; height: 22px; border-radius: 50%; background: #fff;
+    transition: transform .15s ease;
+  }
+  .cfgrow .sw[aria-checked="true"] { background: var(--ua-blue); }
+  .cfgrow .sw[aria-checked="true"]::after { transform: translateX(18px); }
+  .cfg-note { font-size: 12.5px; color: var(--ua-dim); }
+  .namebox { padding: 12px 14px; }
+  .namechips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .namechip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 6px 5px 11px; border-radius: 999px;
+    background: var(--ua-blue-soft); color: var(--ua-blue);
+    font-size: 13.5px; font-weight: 650; max-width: 100%;
+  }
+  .namechip span {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .namechip button {
+    flex: 0 0 auto; display: grid; place-items: center;
+    width: 20px; height: 20px; padding: 0; cursor: pointer;
+    border: 0; border-radius: 50%; background: transparent; color: inherit;
+  }
+  .namechip button:hover { background: rgba(0,0,0,.14); }
+  .namechip ha-icon { --mdc-icon-size: 15px; width: 15px; height: 15px; }
+  .nameadd { display: flex; gap: 8px; margin-top: 10px; }
+  .nameadd input {
+    flex: 1 1 auto; min-width: 0;
+    font: inherit; font-size: 14.5px; padding: 9px 12px;
+    border-radius: 10px; border: 1px solid var(--ua-line);
+    background: var(--ua-bg); color: var(--ua-text);
+  }
+  .nameadd input:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 1px; }
+  .nameadd button {
+    flex: 0 0 auto; padding: 0 16px; cursor: pointer;
+    font: inherit; font-size: 14.5px; font-weight: 700;
+    border-radius: 10px; border: 0;
+    background: var(--ua-blue); color: #fff;
+  }
+  .nameempty { font-size: 13.5px; color: var(--ua-dim); }
   .logrow {
     display: flex; gap: 10px; align-items: baseline;
     padding: 11px 14px; border-top: 1px solid var(--ua-line); font-size: 14px;
@@ -1555,6 +1619,10 @@ class UnifiAllowlistPanel extends HTMLElement {
               <ha-icon icon="mdi:close-circle"></ha-icon>
             </button>
           </div>
+          <button class="filter-btn" id="cfg-btn" aria-haspopup="dialog"
+                  aria-label="Settings" title="Settings">
+            <ha-icon icon="mdi:cog-outline"></ha-icon>
+          </button>
           <button class="filter-btn" id="hist-btn" aria-haspopup="dialog"
                   aria-label="History" title="History">
             <ha-icon icon="mdi:history"></ha-icon>
@@ -1586,6 +1654,22 @@ class UnifiAllowlistPanel extends HTMLElement {
           </div>
         </aside>
 
+        <div class="sheet-bd" id="cfg-bd"></div>
+        <aside class="sheet" id="cfg" role="dialog" aria-modal="true"
+               aria-label="Settings" hidden>
+          <div class="sheet-hd">
+            <ha-icon icon="mdi:cog-outline"></ha-icon>
+            <h2>Settings</h2>
+            <button class="icon-btn" id="cfg-x" aria-label="Close">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="sheet-body" id="cfg-body"></div>
+          <div class="sheet-ft">
+            <span class="cfg-note" id="cfg-note"></span>
+          </div>
+        </aside>
+
         <div class="sheet-bd" id="hist-bd"></div>
         <aside class="sheet" id="hist" role="dialog" aria-modal="true"
                aria-label="History" hidden>
@@ -1611,6 +1695,46 @@ class UnifiAllowlistPanel extends HTMLElement {
       this.dispatchEvent(
         new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })
       );
+    });
+
+    root.getElementById("cfg-btn").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._openCfg(!this._cfgOpen);
+    });
+    root.getElementById("cfg-bd").addEventListener("click", () => this._openCfg(false));
+    root.getElementById("cfg-x").addEventListener("click", () => this._openCfg(false));
+    root.getElementById("cfg").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const sw = ev.target.closest && ev.target.closest(".sw");
+      if (sw) {
+        const on = sw.getAttribute("aria-checked") !== "true";
+        sw.setAttribute("aria-checked", String(on));
+        this._saveCfg(sw.dataset.key, on);
+        return;
+      }
+      const rm = ev.target.closest && ev.target.closest(".namechip button");
+      if (rm) {
+        this._removeName(Number(rm.dataset.idx));
+        return;
+      }
+      if (ev.target.closest && ev.target.closest("#nameadd")) {
+        const input = root.getElementById("nameinput");
+        this._addName(input && input.value);
+      }
+    });
+    root.getElementById("cfg").addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter") return;
+      const input = ev.target;
+      if (!input || input.id !== "nameinput") return;
+      ev.preventDefault();
+      this._addName(input.value);
+    });
+    root.getElementById("cfg").addEventListener("change", (ev) => {
+      const input = ev.target;
+      if (!input || input.tagName !== "INPUT") return;
+      const num = Number(input.value);
+      if (!Number.isFinite(num)) return;
+      this._saveCfg(input.dataset.key, num);
     });
 
     root.getElementById("hist-btn").addEventListener("click", (ev) => {
@@ -1653,6 +1777,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       if (ev.key !== "Escape") return;
       if (this._sheetOpen) this._openSheet(false);
       if (this._histOpen) this._openHist(false);
+      if (this._cfgOpen) this._openCfg(false);
     });
 
     root.getElementById("refresh").addEventListener("click", (ev) => {
@@ -1748,10 +1873,35 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._tab = tab;
     this._confirmBulk = false;
     this._resetPaging();
+
+    // Mark the tab and empty the list, then hand control back to the browser
+    // so it can actually paint that. Doing the render in the same task means
+    // one paint at the end - which is why setting these attributes on its own
+    // changed nothing perceptible.
+    const root = this.shadowRoot;
+    const tabsEl = root.getElementById("tabs");
+    if (tabsEl) {
+      for (const btn of tabsEl.querySelectorAll(".tab")) {
+        btn.setAttribute("aria-selected", String(btn.dataset.tab === tab));
+      }
+    }
+    const list = root.getElementById("list");
+    if (list) {
+      list.innerHTML = "";
+      list.scrollTop = 0;
+    }
+
     this._pushTabHist(tab);
-    this._render();
-    const list = this.shadowRoot.getElementById("list");
-    if (list) list.scrollTop = 0;
+
+    // rAF fires before paint, so a second one is needed to land after it.
+    // The token means a quick double tap renders once, for the tab that won.
+    const token = (this._tabToken = (this._tabToken || 0) + 1);
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => {
+        if (token !== this._tabToken) return;
+        this._render();
+      })
+    );
   }
 
   _onBulk(which) {
@@ -2080,17 +2230,39 @@ class UnifiAllowlistPanel extends HTMLElement {
       denied: d.denied.length,
     };
 
-    root.getElementById("tabs").innerHTML = TAB_DEFS.map((t) => {
-      const n = counts[t.id];
-      const alert = t.id === "pending" && n > 0;
-      return `<button class="tab" role="tab" data-tab="${t.id}"
-                aria-selected="${this._tab === t.id}"
-                aria-label="${t.label}, ${n}">
+    // Rebuilding this wholesale on every tab tap threw away the very button
+    // that was pressed, dropped its ripple, and re-upgraded four <ha-icon>
+    // elements before anything else could happen - which is what made tapping
+    // feel slow. Build once, then only touch what actually changed.
+    const tabsEl = root.getElementById("tabs");
+    if (!tabsEl.firstElementChild) {
+      tabsEl.innerHTML = TAB_DEFS.map(
+        (t) => `<button class="tab" role="tab" data-tab="${t.id}">
                 <ha-icon icon="${t.icon}"></ha-icon
                 ><span class="lbl long">${t.label}</span
                 ><span class="lbl short">${t.short}</span
-                ><span class="n${alert ? " alert" : ""}${n ? "" : " zero"}">${n}</span></button>`;
-    }).join("");
+                ><span class="n"></span></button>`
+      ).join("");
+    }
+    for (const t of TAB_DEFS) {
+      const btn = tabsEl.querySelector(`[data-tab="${t.id}"]`);
+      if (!btn) continue;
+      const n = counts[t.id];
+      const alert = t.id === "pending" && n > 0;
+      const selected = String(this._tab === t.id);
+      if (btn.getAttribute("aria-selected") !== selected) {
+        btn.setAttribute("aria-selected", selected);
+      }
+      const label = `${t.label}, ${n}`;
+      if (btn.getAttribute("aria-label") !== label) {
+        btn.setAttribute("aria-label", label);
+      }
+      const badge = btn.lastElementChild;
+      const cls = `n${alert ? " alert" : ""}${n ? "" : " zero"}`;
+      if (badge.className !== cls) badge.className = cls;
+      const text = String(n);
+      if (badge.textContent !== text) badge.textContent = text;
+    }
 
     this._renderList();
     this._renderToast();
@@ -2358,6 +2530,160 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (reset) reset.hidden = !this._activeCount() && this._sortKey() === "name";
   }
 
+  _openCfg(open) {
+    const root = this.shadowRoot;
+    const sheet = root.getElementById("cfg");
+    const bd = root.getElementById("cfg-bd");
+    if (!sheet || !bd) return;
+    this._cfgOpen = Boolean(open);
+    if (this._cfgOpen) {
+      sheet.hidden = false;
+      this._renderCfg();
+      window.requestAnimationFrame(() => {
+        sheet.classList.add("open");
+        bd.classList.add("open");
+      });
+    } else {
+      sheet.classList.remove("open");
+      bd.classList.remove("open");
+      window.setTimeout(() => {
+        if (!this._cfgOpen) sheet.hidden = true;
+      }, 240);
+    }
+  }
+
+  _cfgDefs() {
+    return [
+      ["block_first", "toggle", "Block on sight, then ask",
+       "Off means an unknown device is reported but left connected."],
+      ["scan_interval", "number", "Check every",
+       "Seconds between reads of the connected device list. Lower is quicker to block; below 15 a busy run can overlap the next check."],
+      ["max_per_run", "number", "Stop if more than this arrive at once",
+       "A safety brake. If more unknown devices appear in one check, nothing is blocked and you get a warning."],
+      ["notify_gap", "number", "Pause between alerts",
+       "Seconds. Lower it if you shorten the check interval."],
+      ["adopt_blocks", "toggle", "Adopt blocks made in UniFi",
+       "Move devices blocked in the UniFi UI into Blocked here."],
+      ["forget_in_unifi", "toggle", "Remove the client from UniFi when forgetting",
+       "Clients with an alias or a fixed IP are only unblocked."],
+      ["deny_unnamed", "toggle", "Always block devices that report no name",
+       "Catches cameras and IoT gear too. Check the waiting list first."],
+    ];
+  }
+
+  _renderCfg(force) {
+    const body = this.shadowRoot.getElementById("cfg-body");
+    if (!body) return;
+    // A background refresh must not wipe a half typed name or number. Our own
+    // edits pass force, because after those the field is stale anyway.
+    const active = this.shadowRoot.activeElement;
+    if (!force && active && active.tagName === "INPUT" && body.contains(active)) {
+      return;
+    }
+    const o = (this._data && this._data.options) || {};
+    const rows = this._cfgDefs()
+      .map(([key, kind, label, hint]) => {
+        const control =
+          kind === "toggle"
+            ? `<button class="sw" role="switch" data-key="${key}"
+                 aria-checked="${o[key] ? "true" : "false"}"
+                 aria-label="${this._esc(label)}"></button>`
+            : `<input type="number" data-key="${key}" value="${
+                o[key] === undefined ? "" : o[key]
+              }" step="${key === "notify_gap" ? "0.5" : "1"}" min="0"
+                 aria-label="${this._esc(label)}">`;
+        return `<div class="cfgrow"><span class="txt">${this._esc(label)}
+                  <small>${this._esc(hint)}</small></span>${control}</div>`;
+      })
+      .join("");
+    const names = (o.deny_names || []).slice();
+    const nameHtml = names.length
+      ? names
+          .map(
+            (n, i) => `<span class="namechip"><span>${this._esc(n)}</span>
+              <button data-idx="${i}" aria-label="Remove ${this._esc(n)}">
+                <ha-icon icon="mdi:close"></ha-icon></button></span>`
+          )
+          .join("")
+      : `<span class="nameempty">Nothing is blocked by name.</span>`;
+
+    body.innerHTML =
+      `<div class="sheet-sec"><h3>This site</h3>` +
+      `<div class="sheet-group">${rows}</div></div>` +
+      `<div class="sheet-sec"><h3>Always block these names</h3>
+        <div class="sheet-group"><div class="namebox">
+          <div class="namechips" id="namechips">${nameHtml}</div>
+          <div class="nameadd">
+            <input id="nameinput" type="text" placeholder="Device name, * and ? allowed"
+                   autocomplete="off" spellcheck="false" enterkeyhint="done">
+            <button id="nameadd">Add</button>
+          </div>
+          <div class="cfgrow" style="padding:10px 0 0;border:0">
+            <span class="txt"><small>Case insensitive. A plain word also matches
+            anywhere in the name. Matches are blocked silently, with no alert and
+            no entry in the waiting list. Names come from the device and can be
+            changed, so this is noise control rather than security.</small></span>
+          </div>
+        </div></div></div>` +
+      `<div class="sheet-sec"><h3>Elsewhere</h3><div class="sheet-group">` +
+      `<div class="cfgrow"><span class="txt">Controller, site, networks and alerts
+        <small>Settings &gt; Devices &amp; services &gt; UniFi Allow List &gt; Configure.
+        Kept there because a wrong value locks the integration out.</small></span></div>` +
+      `</div></div>`;
+    const note = this.shadowRoot.getElementById("cfg-note");
+    if (note) note.textContent = "Changes save as you make them.";
+  }
+
+  _currentNames() {
+    return (((this._data || {}).options || {}).deny_names || []).slice();
+  }
+
+  async _addName(raw) {
+    const value = String(raw || "").trim();
+    if (!value) return;
+    const names = this._currentNames();
+    // Case insensitive at match time, so it would be a no-op stored twice.
+    if (names.some((n) => n.toLowerCase() === value.toLowerCase())) {
+      const input = this.shadowRoot.getElementById("nameinput");
+      if (input) input.value = "";
+      return;
+    }
+    names.push(value);
+    await this._saveCfg("deny_names", names);
+    this._renderCfg(true);
+    // Straight on to the next one without reaching for the field again.
+    const next = this.shadowRoot.getElementById("nameinput");
+    if (next) next.focus();
+  }
+
+  async _removeName(index) {
+    const names = this._currentNames();
+    if (index < 0 || index >= names.length) return;
+    names.splice(index, 1);
+    await this._saveCfg("deny_names", names);
+    this._renderCfg(true);
+  }
+
+  async _saveCfg(key, value) {
+    const entry = (this._data && this._data.entry_id) || this._entryId;
+    if (!entry) return;
+    const note = this.shadowRoot.getElementById("cfg-note");
+    try {
+      await this._hass.callApi("POST", "unifi_allowlist/options", {
+        entry_id: entry,
+        [key]: value,
+      });
+      if (this._data && this._data.options) this._data.options[key] = value;
+      if (note) note.textContent = "Saved.";
+      // Reloads the entry, so give it a moment before trusting the numbers.
+      window.clearTimeout(this._cfgTimer);
+      this._cfgTimer = window.setTimeout(() => this._load(), 1500);
+    } catch (err) {
+      if (note) note.textContent = "Could not save that.";
+      this._renderCfg();
+    }
+  }
+
   _openHist(open) {
     const root = this.shadowRoot;
     const sheet = root.getElementById("hist");
@@ -2570,6 +2896,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
     if (this._sheetOpen) this._renderSheet();
     if (this._histOpen) this._renderHist();
+    if (this._cfgOpen) this._renderCfg();
 
     if (!rows.length) {
       list.innerHTML =
@@ -2581,7 +2908,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     const cap = Math.min(rows.length, MAX_ROWS);
     // Keep whatever was already on screen, so a background refresh cannot
     // yank the list back to the top of a long scroll.
-    this._page = Math.min(Math.max(this._page || PAGE_ROWS, PAGE_ROWS), cap);
+    this._page = Math.min(Math.max(this._page || FIRST_ROWS, FIRST_ROWS), cap);
     const shown = rows.slice(0, this._page);
     this._pageRows = rows;
 
@@ -2608,19 +2935,46 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._io = new IntersectionObserver(
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
-        const cap = Math.min((this._pageRows || []).length, MAX_ROWS);
-        if (this._page >= cap) return;
-        this._page = Math.min(this._page + PAGE_ROWS, cap);
-        this._renderList();
+        this._growList();
       },
-      { root: scroller, rootMargin: "600px 0px" }
+      { root: scroller, rootMargin: "400px 0px" }
     );
     this._io.observe(sentinel);
   }
 
+  /* Extending the list used to call _renderList, which rewrites innerHTML for
+     every row from the top. Growing 14 -> 300 that way builds ~1400 rows and
+     ten thousand icons, destroying and recreating everything already on screen
+     each time. Appending only the new slice builds each row exactly once. */
+  _growList() {
+    const rows = this._pageRows || [];
+    const cap = Math.min(rows.length, MAX_ROWS);
+    if (this._page >= cap) return;
+
+    const list = this.shadowRoot.getElementById("list");
+    const sentinel = this.shadowRoot.getElementById("sentinel");
+    if (!list || !sentinel) return;
+
+    const from = this._page;
+    this._page = Math.min(this._page + PAGE_ROWS, cap);
+    const html = rows
+      .slice(from, this._page)
+      .map((r) => this._rowHtml(r))
+      .join("");
+    sentinel.insertAdjacentHTML("beforebegin", html);
+
+    if (this._page >= cap) {
+      if (this._io) this._io.disconnect();
+      sentinel.outerHTML =
+        rows.length > MAX_ROWS
+          ? `<div class="more">Showing ${MAX_ROWS} of ${rows.length}. Search to narrow it down.</div>`
+          : "";
+    }
+  }
+
   /* Anything that changes what the list contains starts it from the top. */
   _resetPaging() {
-    this._page = PAGE_ROWS;
+    this._page = FIRST_ROWS;
   }
 
   _bulkHtml(rows) {

@@ -33,6 +33,22 @@ from .const import (
     CONF_SITE,
     CONF_VERIFY_SSL,
     DOMAIN,
+    CONF_SCAN_INTERVAL,
+    CONF_MAX_PER_RUN,
+    CONF_NOTIFY_GAP,
+    CONF_BLOCK_FIRST,
+    CONF_ADOPT_BLOCKS,
+    CONF_FORGET_IN_UNIFI,
+    CONF_DENY_UNNAMED,
+    CONF_DENY_NAMES,
+    CONF_SSIDS,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_MAX_PER_RUN,
+    DEFAULT_NOTIFY_GAP,
+    DEFAULT_BLOCK_FIRST,
+    DEFAULT_ADOPT_BLOCKS,
+    DEFAULT_FORGET_IN_UNIFI,
+    DEFAULT_DENY_UNNAMED,
     EVENT_ACTION,
     PANEL_ASSET,
     PANEL_ICON,
@@ -190,6 +206,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             hass.http.register_static_path(STATIC_URL, static_dir, False)
 
         hass.http.register_view(UnifiAllowlistDataView(hass))
+        hass.http.register_view(UnifiAllowlistOptionsView(hass))
         hass.data[f"{DOMAIN}_static"] = True
 
     # Cache-bust the panel with the integration's own version. Browsers and the
@@ -467,6 +484,82 @@ def _async_register_action_listener(hass: HomeAssistant, entry: ConfigEntry) -> 
     entry.async_on_unload(hass.bus.async_listen(EVENT_ACTION, _handle))
 
 
+class UnifiAllowlistOptionsView(HomeAssistantView):
+    """Change the handful of options that belong next to the list.
+
+    Only the ones you reach for while looking at devices. Credentials, the site
+    and the notification wiring stay in the config entry, where a mistake is a
+    reconfigure rather than a lockout.
+    """
+
+    url = "/api/unifi_allowlist/options"
+    name = "api:unifi_allowlist:options"
+    requires_auth = True
+
+    # Everything else in the entry options is deliberately not reachable here.
+    ALLOWED = {
+        CONF_SCAN_INTERVAL: int,
+        CONF_MAX_PER_RUN: int,
+        CONF_NOTIFY_GAP: float,
+        CONF_BLOCK_FIRST: bool,
+        CONF_ADOPT_BLOCKS: bool,
+        CONF_FORGET_IN_UNIFI: bool,
+        CONF_DENY_UNNAMED: bool,
+        CONF_DENY_NAMES: list,
+        CONF_SSIDS: list,
+    }
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def post(self, request):
+        try:
+            body = await request.json()
+        except ValueError:
+            return self.json({"error": "bad request"}, status_code=400)
+
+        coords = _all_coordinators(self.hass)
+        wanted = body.get("entry_id")
+        coord = next((c for c in coords if c.entry_id == wanted), None)
+        if coord is None:
+            return self.json({"error": "unknown site"}, status_code=404)
+
+        changes = {}
+        for key, kind in self.ALLOWED.items():
+            if key not in body:
+                continue
+            value = body[key]
+            try:
+                if kind is bool:
+                    changes[key] = bool(value)
+                elif kind is int:
+                    changes[key] = int(value)
+                elif kind is float:
+                    changes[key] = float(value)
+                else:
+                    changes[key] = [str(v).strip() for v in value if str(v).strip()]
+            except (TypeError, ValueError):
+                return self.json(
+                    {"error": f"bad value for {key}"}, status_code=400
+                )
+
+        if not changes:
+            return self.json({"ok": True, "changed": 0})
+
+        # Guard rails, so the panel cannot set something that breaks polling.
+        if CONF_SCAN_INTERVAL in changes:
+            changes[CONF_SCAN_INTERVAL] = max(5, min(600, changes[CONF_SCAN_INTERVAL]))
+        if CONF_MAX_PER_RUN in changes:
+            changes[CONF_MAX_PER_RUN] = max(1, min(500, changes[CONF_MAX_PER_RUN]))
+        if CONF_NOTIFY_GAP in changes:
+            changes[CONF_NOTIFY_GAP] = max(0.0, min(30.0, changes[CONF_NOTIFY_GAP]))
+
+        merged = {**dict(coord.entry.options), **changes}
+        self.hass.config_entries.async_update_entry(coord.entry, options=merged)
+        _LOGGER.info("options changed from the panel: %s", ", ".join(changes))
+        return self.json({"ok": True, "changed": len(changes)})
+
+
 class UnifiAllowlistDataView(HomeAssistantView):
     """Everything the panel needs, in one call."""
 
@@ -592,5 +685,26 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "high_water": coord.store.high_water,
                 "audit": list(reversed(store.audit[-120:])),
                 "guard_min": coord.guard_min,
+                "options": {
+                    CONF_SCAN_INTERVAL: coord._opt(
+                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+                    ),
+                    CONF_MAX_PER_RUN: coord._opt(CONF_MAX_PER_RUN, DEFAULT_MAX_PER_RUN),
+                    CONF_NOTIFY_GAP: coord._opt(CONF_NOTIFY_GAP, DEFAULT_NOTIFY_GAP),
+                    CONF_BLOCK_FIRST: bool(
+                        coord._opt(CONF_BLOCK_FIRST, DEFAULT_BLOCK_FIRST)
+                    ),
+                    CONF_ADOPT_BLOCKS: bool(
+                        coord._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)
+                    ),
+                    CONF_FORGET_IN_UNIFI: bool(
+                        coord._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)
+                    ),
+                    CONF_DENY_UNNAMED: bool(
+                        coord._opt(CONF_DENY_UNNAMED, DEFAULT_DENY_UNNAMED)
+                    ),
+                    CONF_DENY_NAMES: list(coord.deny_name_patterns),
+                    CONF_SSIDS: list(coord._opt(CONF_SSIDS, []) or []),
+                },
             }
         )
