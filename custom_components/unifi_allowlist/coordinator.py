@@ -130,6 +130,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self.vendors: dict[str, str] = {}
         # Hostnames the controller reports for more than one MAC.
         self._dup_names: set[str] = set()
+        # Every MAC the controller has a record of, so we can tell an entry it
+        # has never heard of from one that is merely offline.
+        self.known_macs: set[str] = set()
         self._devices_stamp = 0.0
         self.online: list[dict] = []
         self._breaker_tripped = False
@@ -604,6 +607,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         called the same thing. Nothing here can tell which one is genuine, so
         the answer is to stop presenting them as if they were distinguishable.
         """
+        self.known_macs = {
+            m for m in (str(r.get("mac") or "").lower() for r in known or []) if m
+        }
         seen: dict[str, set[str]] = {}
         for rec in known or []:
             mac = str(rec.get("mac") or "").lower()
@@ -1433,6 +1439,27 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             if int(rec.get("last_seen") or 0) > cutoff:
                 continue
             doomed.append(mac)
+
+        # A device allowed ahead of time that never turned up appears in no
+        # controller list at all, so the loop above can never see it. Without
+        # this it would sit in the allow list for good, beyond the reach of any
+        # cleanup.
+        on_controller = {str(r.get("mac", "")).lower() for r in known}
+        ghosts = [
+            mac
+            for mac, rec in self.store.allowed.items()
+            if mac not in on_controller
+            and mac not in online
+            and not self.last_seen.get(mac)
+            and int((rec or {}).get("added") or 0) < cutoff
+        ]
+        if ghosts:
+            _LOGGER.info(
+                "%d allowed device(s) added over %d days ago have never appeared",
+                len(ghosts),
+                days,
+            )
+        doomed.extend(ghosts)
 
         result = {"candidates": len(doomed), "days": days, "dry_run": dry_run}
 

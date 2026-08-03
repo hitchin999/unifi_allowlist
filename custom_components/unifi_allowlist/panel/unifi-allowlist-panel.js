@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.4";
+const PANEL_VERSION = "1.11.5";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -1037,16 +1037,26 @@ const STYLES = `
        giving up for reading space. Only the cards: any banner below them is a
        warning about enforcement and has to stay put. Height is measured rather
        than guessed. */
+    /* Animating the margin meant relayouting a list of hundreds of rows on
+       every frame, which is exactly what made it stutter. The visible motion
+       is a transform instead - composited, no layout - and the space is taken
+       back in a single step once the slide has finished. */
     .stats {
-      transition: margin-top .22s ease, opacity .18s ease;
+      transition: transform .26s cubic-bezier(.33,.1,.25,1),
+                  opacity .16s ease;
+      will-change: transform;
     }
-    .wrap.chrome-hidden .head-area { padding-top: 0; padding-bottom: 0; }
-    .wrap.chrome-hidden .head-area:empty { border-bottom: 0; }
     .wrap.chrome-hidden .stats {
-      margin-top: calc(-1 * var(--ua-stats-h, 0px));
+      transform: translateY(calc(-100% - 14px));
       opacity: 0;
       pointer-events: none;
     }
+    /* Applied after the slide, and removed before sliding back, so the one
+       layout it costs never lands mid-animation. */
+    .wrap.chrome-collapsed .stats { margin-top: calc(-1 * var(--ua-stats-h, 0px)); }
+    .wrap.chrome-collapsed .head-area { padding-top: 0; padding-bottom: 0; }
+    .wrap.chrome-collapsed .head-area:empty { border-bottom: 0; }
+
     @media (prefers-reduced-motion: reduce) {
       .stats { transition: none; }
     }
@@ -1401,17 +1411,42 @@ class UnifiAllowlistPanel extends HTMLElement {
       this._statsRo.observe(stats);
     }
 
+    const setHidden = (hide) => {
+      if (hide === wrap.classList.contains("chrome-hidden")) return;
+      window.clearTimeout(this._chromeTimer);
+      if (hide) {
+        wrap.classList.add("chrome-hidden");
+        // Reclaim the space only once the slide is over.
+        this._chromeTimer = window.setTimeout(() => {
+          if (wrap.classList.contains("chrome-hidden")) {
+            wrap.classList.add("chrome-collapsed");
+          }
+        }, 260);
+      } else {
+        measure();
+        // Give the space back first, then slide down into it next frame.
+        wrap.classList.remove("chrome-collapsed");
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() => wrap.classList.remove("chrome-hidden"))
+        );
+      }
+    };
+
     let last = list.scrollTop;
+    let travel = 0;
     this._boundScroll = () => {
       const top = list.scrollTop;
       const delta = top - last;
-      // A threshold, so a stray pixel of momentum does not flap the header.
-      if (Math.abs(delta) < 6) return;
       last = top;
-      const hide = delta > 0 && top > 40;
-      if (hide === wrap.classList.contains("chrome-hidden")) return;
-      wrap.classList.toggle("chrome-hidden", hide);
-      if (!hide) measure();
+      if (top <= 8) {
+        travel = 0;
+        setHidden(false);
+        return;
+      }
+      // Accumulate in one direction, so momentum wobble cannot flip it.
+      travel = delta > 0 === travel > 0 ? travel + delta : delta;
+      if (travel > 28 && top > 48) setHidden(true);
+      else if (travel < -28) setHidden(false);
     };
     list.addEventListener("scroll", this._boundScroll, { passive: true });
   }
@@ -1452,6 +1487,7 @@ class UnifiAllowlistPanel extends HTMLElement {
   disconnectedCallback() {
     if (this._tabRo) this._tabRo.disconnect();
     if (this._statsRo) this._statsRo.disconnect();
+    window.clearTimeout(this._chromeTimer);
     if (this._boundScroll) {
       const list = this.shadowRoot && this.shadowRoot.getElementById("list");
       if (list) list.removeEventListener("scroll", this._boundScroll);
@@ -1883,6 +1919,10 @@ class UnifiAllowlistPanel extends HTMLElement {
         this._removeName(Number(rm.dataset.idx));
         return;
       }
+      if (ev.target.closest && ev.target.closest("#preadd")) {
+        this._preApprove();
+        return;
+      }
       if (ev.target.closest && ev.target.closest("#nameadd")) {
         const input = root.getElementById("nameinput");
         this._addName(input && input.value);
@@ -1891,7 +1931,13 @@ class UnifiAllowlistPanel extends HTMLElement {
     root.getElementById("cfg").addEventListener("keydown", (ev) => {
       if (ev.key !== "Enter") return;
       const input = ev.target;
-      if (!input || input.id !== "nameinput") return;
+      if (!input) return;
+      if (input.id === "premac" || input.id === "prename") {
+        ev.preventDefault();
+        this._preApprove();
+        return;
+      }
+      if (input.id !== "nameinput") return;
       ev.preventDefault();
       this._addName(input.value);
     });
@@ -2786,6 +2832,25 @@ class UnifiAllowlistPanel extends HTMLElement {
     body.innerHTML =
       `<div class="sheet-sec"><h3>This site</h3>` +
       `<div class="sheet-group">${rows}</div></div>` +
+      `<div class="sheet-sec"><h3>Allow a device before it arrives</h3>
+        <div class="sheet-group"><div class="namebox">
+          <div class="nameadd">
+            <input id="premac" type="text" placeholder="MAC, e.g. a4:83:e7:12:34:56"
+                   autocomplete="off" spellcheck="false" inputmode="text"
+                   enterkeyhint="done">
+          </div>
+          <div class="nameadd">
+            <input id="prename" type="text" placeholder="Name (optional)"
+                   autocomplete="off" enterkeyhint="done">
+            <button id="preadd">Allow</button>
+          </div>
+          <div class="cfgrow" style="padding:10px 0 0;border:0">
+            <span class="txt"><small>Adds the MAC to the allow list now, so the
+            device is let straight on instead of being blocked and queued the
+            first time it appears. Separators are optional — a4:83:e7:12:34:56,
+            A4-83-E7-12-34-56 and a483e7123456 are all accepted.</small></span>
+          </div>
+        </div></div></div>` +
       `<div class="sheet-sec"><h3>Always block these names</h3>
         <div class="sheet-group"><div class="namebox">
           <div class="namechips" id="namechips">${nameHtml}</div>
@@ -2808,6 +2873,36 @@ class UnifiAllowlistPanel extends HTMLElement {
       `</div></div>`;
     const note = this.shadowRoot.getElementById("cfg-note");
     if (note) note.textContent = "Changes save as you make them.";
+  }
+
+  /* Accepts colons, dashes, dots or nothing at all, and rejects anything that
+     is not exactly twelve hex digits. */
+  static _normMac(value) {
+    const hex = String(value || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+    if (hex.length !== 12) return "";
+    return hex.match(/.{2}/g).join(":");
+  }
+
+  async _preApprove() {
+    const root = this.shadowRoot;
+    const macEl = root.getElementById("premac");
+    const nameEl = root.getElementById("prename");
+    const mac = UnifiAllowlistPanel._normMac(macEl && macEl.value);
+    if (!mac) {
+      this._notify("That does not look like a MAC address.", "err");
+      if (macEl) macEl.focus();
+      return;
+    }
+    const name = String((nameEl && nameEl.value) || "").trim();
+    const ok = await this._call("allow", { mac });
+    if (!ok) return;
+    if (name) await this._call("set_name", { mac, name });
+    if (macEl) macEl.value = "";
+    if (nameEl) nameEl.value = "";
+    this._notify(`${name || mac} added to the allow list`, "ok");
+    if (macEl) macEl.focus();
+    await this._load();
+    this._renderCfg(true);
   }
 
   _currentNames() {
@@ -2995,6 +3090,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       band: "",
       last_seen: e.last_seen || 0,
       live: liveMacs.has(e.mac),
+      known: e.known !== false,
       review: e.review === true,
       status: liveMacs.has(e.mac) ? state : "off",
       // the verdict is a fact about the list, not about being connected
@@ -3005,6 +3101,10 @@ class UnifiAllowlistPanel extends HTMLElement {
           : { v: "not connected", cls: "off", icon: "mdi:wifi-off" },
         liveMacs.has(e.mac)
           ? null
+          : e.known === false
+          ? // Allowed ahead of time and still never seen. Worth marking, or it
+            // is indistinguishable from a device that is merely switched off.
+            { v: "never seen here", cls: "off", icon: "mdi:help-circle-outline" }
           : UnifiAllowlistPanel._lastSeenChip(e.last_seen),
         e.vendor ? { v: e.vendor, cls: "off", icon: "mdi:factory" } : null,
       ],

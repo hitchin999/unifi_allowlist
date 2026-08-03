@@ -601,6 +601,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
         }
         live_aps = {r["mac"]: r["ap"] for r in coord.online if r.get("ap")}
         seen_at = coord.last_seen
+        on_controller = coord.known_macs
         last_ap = coord.last_ap
         vendors = coord.vendors
 
@@ -634,6 +635,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "ap": live_aps.get(mac, "") or last_ap.get(mac, ""),
                         "last_seen": seen_at.get(mac, 0),
                         "vendor": vendors.get(mac, ""),
+                        "known": mac in on_controller,
                     }
                     for mac, info in store.allowed.items()
                 ],
@@ -649,6 +651,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "ap": live_aps.get(mac, "") or last_ap.get(mac, ""),
                         "last_seen": seen_at.get(mac, 0),
                         "vendor": vendors.get(mac, ""),
+                        "known": mac in on_controller,
                         "review": False,
                     }
                     for mac, info in store.denied.items()
