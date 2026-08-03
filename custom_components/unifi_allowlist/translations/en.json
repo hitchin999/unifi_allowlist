@@ -53,7 +53,7 @@
         },
         "data_description": {
           "adopt_blocks": "Each poll, move devices blocked in the UniFi UI into Denied, and re-apply blocks that were removed there. Off by default.",
-          "deny_names": "One entry per name, case insensitive, * and ? wildcards allowed. Matching devices are blocked silently with no notification and no queue entry. Names are reported by the device and can be changed, so treat this as noise control rather than security.",
+          "deny_names": "One entry per name, case insensitive, * and ? wildcards allowed. A plain word also matches anywhere in the name. Matching devices are blocked silently with no notification and no queue entry. Where the panel shows a name with the MAC appended, such as 'Tesla a2:fb', either form works - the plain name catches every client using it, the suffixed one catches only that device. Names come from the device and can be changed, so treat this as noise control rather than security.",
           "deny_unnamed": "Devices with no hostname at all. This catches a lot of legitimate hardware such as cameras and IoT gear, so check the waiting list before turning it on.",
           "forget_in_unifi": "Deletes the client record on the controller, the same as Forget in the UniFi UI - alias, fixed IP and history included, with no undo. Clients that have a name or a fixed IP set in UniFi are only unblocked instead, so nothing you configured there is destroyed.",
           "min_list_guard": "An optional hard floor: below this many allowed devices, nothing is blocked at all. Off by default, because losing the stored list is caught separately and a fixed number suits a large site far better than a small one. Set it only if you want a belt-and-braces floor of your own.",

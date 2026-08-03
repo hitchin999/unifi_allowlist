@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.1";
+const PANEL_VERSION = "1.11.2";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -144,9 +144,9 @@ const STYLES = `
       --ua-pop-shadow: 0 18px 52px rgba(0,0,0,.55);
       --ua-overlay: rgba(0,0,0,.54);
     /* Footprint of the floating tab bar: its own height plus the gap beneath
-       it. The list stops this far above the bottom, so nothing scrolls behind
-       the bar. */
-    --ua-tabbar: 96px;
+       it. Measured at runtime in _watchTabBar; this is only the value used
+       before that first measurement lands. */
+    --ua-tabbar: 84px;
   }
 
   * { box-sizing: border-box; }
@@ -1040,7 +1040,7 @@ const STYLES = `
        ever behind the glass. env() covers the gesture bar. */
     .list-scroll {
       padding: 10px 12px 12px;
-      margin-bottom: calc(var(--ua-tabbar, 96px) + env(safe-area-inset-bottom));
+      margin-bottom: calc(var(--ua-tabbar, 84px) + env(safe-area-inset-bottom));
     }
 
     /* floating glass tab bar, pinned and always visible */
@@ -1315,6 +1315,23 @@ class UnifiAllowlistPanel extends HTMLElement {
     return this._hass;
   }
 
+  /* The bar is floating, so the list has to reserve room for it. Guessing that
+     height in CSS meant a visible dead strip whenever the guess was generous.
+     Measuring it keeps the list ending just above the bar on any device. */
+  _watchTabBar() {
+    const tabs = this.shadowRoot && this.shadowRoot.getElementById("tabs");
+    if (!tabs || typeof ResizeObserver === "undefined") return;
+    const apply = () => {
+      const h = tabs.getBoundingClientRect().height;
+      // Bar height + its 12px offset from the bottom + a small breathing gap.
+      if (h > 0) this.style.setProperty("--ua-tabbar", `${Math.round(h + 18)}px`);
+    };
+    if (this._tabRo) this._tabRo.disconnect();
+    this._tabRo = new ResizeObserver(apply);
+    this._tabRo.observe(tabs);
+    apply();
+  }
+
   connectedCallback() {
     this.dataset.panelVersion = PANEL_VERSION;
     this._timer = setInterval(() => this._load(), REFRESH_MS);
@@ -1332,6 +1349,7 @@ class UnifiAllowlistPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    if (this._tabRo) this._tabRo.disconnect();
     if (this._timer) clearInterval(this._timer);
     if (this._toastTimer) clearTimeout(this._toastTimer);
     window.removeEventListener("popstate", this._boundPop);
@@ -2236,6 +2254,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     // feel slow. Build once, then only touch what actually changed.
     const tabsEl = root.getElementById("tabs");
     if (!tabsEl.firstElementChild) {
+      this._needTabMeasure = true;
       tabsEl.innerHTML = TAB_DEFS.map(
         (t) => `<button class="tab" role="tab" data-tab="${t.id}">
                 <ha-icon icon="${t.icon}"></ha-icon
@@ -2243,6 +2262,10 @@ class UnifiAllowlistPanel extends HTMLElement {
                 ><span class="lbl short">${t.short}</span
                 ><span class="n"></span></button>`
       ).join("");
+    }
+    if (this._needTabMeasure) {
+      this._needTabMeasure = false;
+      window.requestAnimationFrame(() => this._watchTabBar());
     }
     for (const t of TAB_DEFS) {
       const btn = tabsEl.querySelector(`[data-tab="${t.id}"]`);

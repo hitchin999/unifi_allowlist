@@ -594,7 +594,10 @@ class UnifiAllowlistDataView(HomeAssistantView):
         live_macs = {r["mac"] for r in coord.online if r["live"]}
         live_ips = {r["mac"]: r["ip"] for r in coord.online if r.get("ip")}
         live_names = {
-            r["mac"]: r["hostname"] for r in coord.online if r.get("hostname")
+            # Already label-first, then alias, then hostname.
+            r["mac"]: r["name"]
+            for r in coord.online
+            if r.get("name")
         }
         live_aps = {r["mac"]: r["ap"] for r in coord.online if r.get("ap")}
         seen_at = coord.last_seen

@@ -67,6 +67,17 @@ from .store import DeviceStore
 _LOGGER = logging.getLogger(__name__)
 
 
+def _reported_name(rec: dict) -> str:
+    """The best name the controller has for a client.
+
+    ``name`` is the alias somebody deliberately set in the UniFi UI. ``hostname``
+    is whatever the device announced over DHCP, which the controller can carry
+    long after it stopped being true - so the alias wins, and the hostname is
+    only a fallback.
+    """
+    return str(rec.get("name") or rec.get("hostname") or "").strip()
+
+
 def _only_digits(value: str) -> str:
     """Compare phone numbers without caring about +, spaces or dashes."""
     return "".join(ch for ch in str(value or "") if ch.isdigit())
@@ -117,6 +128,8 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # connected still says where it was and what it probably is.
         self.last_ap: dict[str, str] = {}
         self.vendors: dict[str, str] = {}
+        # Hostnames the controller reports for more than one MAC.
+        self._dup_names: set[str] = set()
         self._devices_stamp = 0.0
         self.online: list[dict] = []
         self._breaker_tripped = False
@@ -291,21 +304,34 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     def _denied_by_name(self, rec: dict) -> str | None:
         """Which rule, if any, says to suppress this device.
 
-        Matching is on the name the client reports, case-insensitively, with
-        * and ? wildcards. A device reporting no name at all is only caught by
-        the separate 'unnamed' option, since there is no text to match.
+        Matching is case-insensitive with * and ? wildcards, and runs against
+        both the plain reported name and the disambiguated one shown in the
+        panel. That matters: a name shared by several clients is displayed as
+        "Tesla a2:fb", so a rule copied off the screen has to work - while a
+        rule of just "Tesla" still catches every one of them. The suffixed form
+        is therefore the way to block one specific offender and leave its
+        namesakes alone.
+
+        A device reporting no name at all is only caught by the separate
+        'unnamed' option, since there is no text to match.
         """
-        reported = str(rec.get("hostname") or rec.get("name") or "").strip()
+        reported = _reported_name(rec)
         if not reported:
             if bool(self._opt(CONF_DENY_UNNAMED, DEFAULT_DENY_UNNAMED)):
                 return "(no name)"
             return None
-        folded = reported.casefold()
+
+        candidates = {reported.casefold()}
+        shown = self._display_name(rec)
+        if shown:
+            candidates.add(shown.casefold())
+
         for pattern in self.deny_name_patterns:
-            if pattern == folded or fnmatch.fnmatch(folded, pattern):
-                return pattern
-            if "*" not in pattern and "?" not in pattern and pattern in folded:
-                return pattern
+            for folded in candidates:
+                if pattern == folded or fnmatch.fnmatch(folded, pattern):
+                    return pattern
+                if "*" not in pattern and "?" not in pattern and pattern in folded:
+                    return pattern
         return None
 
     async def _refresh_controller_name(self) -> None:
@@ -497,6 +523,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             known = self._known_cache
 
         self.last_error = None
+        self._index_names(known)
 
         if self._controller_name is None:
             await self._refresh_controller_name()
@@ -569,6 +596,43 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             "breaker": self._breaker_tripped,
         }
 
+    def _index_names(self, known: list[dict]) -> None:
+        """Find hostnames the controller reports for more than one client.
+
+        UniFi derives hostname from DHCP, and a lease handed on to a new device
+        can carry the old name with it - so several unrelated MACs end up all
+        called the same thing. Nothing here can tell which one is genuine, so
+        the answer is to stop presenting them as if they were distinguishable.
+        """
+        seen: dict[str, set[str]] = {}
+        for rec in known or []:
+            mac = str(rec.get("mac") or "").lower()
+            name = _reported_name(rec)
+            if not mac or not name:
+                continue
+            seen.setdefault(name.casefold(), set()).add(mac)
+        self._dup_names = {n for n, macs in seen.items() if len(macs) > 1}
+        if self._dup_names:
+            _LOGGER.debug(
+                "%d name(s) reported for several clients: %s",
+                len(self._dup_names),
+                ", ".join(sorted(self._dup_names)[:10]),
+            )
+
+    def _display_name(self, rec: dict) -> str:
+        """Reported name, made unique the way the UniFi UI does it.
+
+        A shared name gets the last two octets appended - "Tesla a2:fb" - so two
+        rows called the same thing can still be told apart.
+        """
+        name = _reported_name(rec)
+        if not name:
+            return ""
+        mac = str(rec.get("mac") or "").lower()
+        if len(mac) >= 5 and name.casefold() in self._dup_names:
+            return f"{name} {mac[-5:]}"
+        return name
+
     async def _backfill_names(self, known: list[dict]) -> None:
         """Fill in names the controller knows for MACs already on a list.
 
@@ -580,7 +644,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         by_mac = {}
         for rec in known:
             mac = str(rec.get("mac", "")).lower()
-            host = rec.get("hostname") or rec.get("name") or ""
+            host = self._display_name(rec)
             if mac and host:
                 by_mac[mac] = host
 
@@ -593,7 +657,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 if not isinstance(entry, dict):
                     continue
                 host = by_mac.get(mac)
-                if host and entry.get("name") != host and not entry.get("name"):
+                # Track what the controller currently says rather than freezing
+                # the first thing it ever said. A name you set yourself lives in
+                # labels and is checked ahead of this, so it is never touched.
+                if host and entry.get("name") != host:
                     entry["name"] = host
                     changed += 1
 
@@ -700,7 +767,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             status = "unknown"
 
         label = self.store.label_for(mac)
-        reported = rec.get("hostname") or rec.get("name") or ""
+        reported = self._display_name(rec)
 
         return {
             "mac": mac,
@@ -816,7 +883,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 await self._safe_block(mac)
                 await self.store.async_deny(
                     mac,
-                    name=rec.get("hostname") or rec.get("name") or "",
+                    name=self._display_name(rec),
                     ssid=self._ssid_of(rec),
                 )
                 suppressed += 1
@@ -824,7 +891,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 continue
 
             name = (
-                self.store.label_for(mac) or rec.get("hostname") or "no name"
+                self.store.label_for(mac) or self._display_name(rec) or "no name"
             )
             ssid = self._ssid_of(rec) or "?"
             ip = rec.get("ip") or rec.get("last_ip") or ""
@@ -1156,7 +1223,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 continue
             if rec.get("blocked"):
                 on_controller.add(mac)
-            names[mac] = rec.get("name") or rec.get("hostname") or ""
+            names[mac] = self._display_name(rec)
 
         ours = set(self.store.denied) | set(self.store.pending)
         allowed_now = set(self.store.allowed)

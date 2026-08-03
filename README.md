@@ -171,6 +171,19 @@ Bear in mind it identifies the maker of the wifi chipset, not the product, and
 a phone using a private wifi address reports no usable vendor at all, because
 the address was invented rather than assigned.
 
+## Device names
+
+Names come from the controller, preferring the alias set in UniFi over the
+hostname the device announced over DHCP. The hostname is worth treating with
+suspicion: UniFi derives it from the DHCP lease, and a lease handed on to a new
+device can carry the previous holder's name with it, so several unrelated
+clients end up all called the same thing.
+
+Where a name is reported for more than one MAC, the last two octets are
+appended - `Tesla 45:cd`, `Tesla a2:fb` - the same way the UniFi UI does it, so
+the rows can still be told apart. Renaming a device in the panel overrides all
+of this.
+
 ## Sorting and filtering
 
 **Sort & filter** beside the search box opens a sheet: sort by name either way,
