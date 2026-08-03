@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.5";
+const PANEL_VERSION = "1.11.6";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -357,11 +357,12 @@ const STYLES = `
 
   /* ---------- summary tiles ---------- */
 
-  .head-area {
-    flex: 0 0 auto;
+  /* Banners only now, and they take no room when there are none. */
+  .head-area { flex: 0 0 auto; }
+  #banner:not(:empty) {
     background: var(--ua-card);
     border-bottom: 1px solid var(--ua-line);
-    padding: 14px 18px 12px;
+    padding: 12px 18px;
   }
   .stats {
     display: grid;
@@ -468,11 +469,17 @@ const STYLES = `
 
   /* ---------- toolbar ---------- */
 
+  /* Inside the scroller, pinned to its top. The stat cards above simply scroll
+     away - native, so there is nothing to animate and nothing to catch up. The
+     negative side margins let the background bleed over the scroller's own
+     padding, or rows would show through in the gutters. */
   .tools {
-    flex: 0 0 auto;
-    padding: 12px 18px 0;
+    position: sticky; top: 0; z-index: 4;
+    margin: 0 -18px 2px; padding: 10px 18px;
     display: flex; align-items: center; gap: 10px;
+    background: var(--ua-bg);
   }
+  .stats { padding: 14px 0 0; }
   .tools .search { flex: 1 1 auto; min-width: 0; }
   .search {
     display: flex; align-items: center; gap: 9px;
@@ -1037,29 +1044,7 @@ const STYLES = `
        giving up for reading space. Only the cards: any banner below them is a
        warning about enforcement and has to stay put. Height is measured rather
        than guessed. */
-    /* Animating the margin meant relayouting a list of hundreds of rows on
-       every frame, which is exactly what made it stutter. The visible motion
-       is a transform instead - composited, no layout - and the space is taken
-       back in a single step once the slide has finished. */
-    .stats {
-      transition: transform .26s cubic-bezier(.33,.1,.25,1),
-                  opacity .16s ease;
-      will-change: transform;
-    }
-    .wrap.chrome-hidden .stats {
-      transform: translateY(calc(-100% - 14px));
-      opacity: 0;
-      pointer-events: none;
-    }
-    /* Applied after the slide, and removed before sliding back, so the one
-       layout it costs never lands mid-animation. */
-    .wrap.chrome-collapsed .stats { margin-top: calc(-1 * var(--ua-stats-h, 0px)); }
-    .wrap.chrome-collapsed .head-area { padding-top: 0; padding-bottom: 0; }
-    .wrap.chrome-collapsed .head-area:empty { border-bottom: 0; }
 
-    @media (prefers-reduced-motion: reduce) {
-      .stats { transition: none; }
-    }
     .stat {
       flex-direction: column; align-items: center; gap: 3px;
       padding: 9px 4px; border-radius: 14px;
@@ -1072,7 +1057,8 @@ const STYLES = `
     .stat-s { display: none; }
     .banner { font-size: 13px; padding: 10px 12px; }
 
-    .tools { padding: 10px 12px 0; }
+    .tools { margin: 0 -12px 2px; padding: 8px 12px; }
+    .stats { padding: 10px 0 0; }
     .search { height: 44px; border-radius: 15px; }
     .filter-btn { height: 44px; border-radius: 15px; padding: 0 12px; }
     .sentinel {
@@ -1085,7 +1071,7 @@ const STYLES = `
        scroll area instead means the list simply stops above it, and nothing is
        ever behind the glass. env() covers the gesture bar. */
     .list-scroll {
-      padding: 10px 12px 12px;
+      padding: 0 12px 12px;
       margin-bottom: calc(var(--ua-tabbar, 84px) + env(safe-area-inset-bottom));
     }
 
@@ -1387,70 +1373,6 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
   }
 
-  /* Hide the stat cards while scrolling down, bring them back on the way up
-     or at the top - the pattern every mobile app uses. Desktop keeps them:
-     there is room, and the CSS that collapses them is mobile-only anyway. */
-  _watchScrollChrome() {
-    const list = this.shadowRoot && this.shadowRoot.getElementById("list");
-    const wrap = this.shadowRoot && this.shadowRoot.querySelector(".wrap");
-    const stats = this.shadowRoot && this.shadowRoot.getElementById("stats");
-    if (!list || !wrap || !stats || this._boundScroll) return;
-
-    const measure = () => {
-      const h = stats.getBoundingClientRect().height;
-      // Only while shown, or we would measure the collapsed height and latch
-      // it at zero.
-      if (h > 0 && !wrap.classList.contains("chrome-hidden")) {
-        this.style.setProperty("--ua-stats-h", `${Math.round(h)}px`);
-      }
-    };
-    measure();
-    if (typeof ResizeObserver !== "undefined") {
-      if (this._statsRo) this._statsRo.disconnect();
-      this._statsRo = new ResizeObserver(measure);
-      this._statsRo.observe(stats);
-    }
-
-    const setHidden = (hide) => {
-      if (hide === wrap.classList.contains("chrome-hidden")) return;
-      window.clearTimeout(this._chromeTimer);
-      if (hide) {
-        wrap.classList.add("chrome-hidden");
-        // Reclaim the space only once the slide is over.
-        this._chromeTimer = window.setTimeout(() => {
-          if (wrap.classList.contains("chrome-hidden")) {
-            wrap.classList.add("chrome-collapsed");
-          }
-        }, 260);
-      } else {
-        measure();
-        // Give the space back first, then slide down into it next frame.
-        wrap.classList.remove("chrome-collapsed");
-        window.requestAnimationFrame(() =>
-          window.requestAnimationFrame(() => wrap.classList.remove("chrome-hidden"))
-        );
-      }
-    };
-
-    let last = list.scrollTop;
-    let travel = 0;
-    this._boundScroll = () => {
-      const top = list.scrollTop;
-      const delta = top - last;
-      last = top;
-      if (top <= 8) {
-        travel = 0;
-        setHidden(false);
-        return;
-      }
-      // Accumulate in one direction, so momentum wobble cannot flip it.
-      travel = delta > 0 === travel > 0 ? travel + delta : delta;
-      if (travel > 28 && top > 48) setHidden(true);
-      else if (travel < -28) setHidden(false);
-    };
-    list.addEventListener("scroll", this._boundScroll, { passive: true });
-  }
-
   _watchTabBar() {
     const tabs = this.shadowRoot && this.shadowRoot.getElementById("tabs");
     if (!tabs || typeof ResizeObserver === "undefined") return;
@@ -1465,7 +1387,6 @@ class UnifiAllowlistPanel extends HTMLElement {
     apply();
     this._measureOffset();
     this._watchViewport();
-    this._watchScrollChrome();
   }
 
   connectedCallback() {
@@ -1486,13 +1407,6 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   disconnectedCallback() {
     if (this._tabRo) this._tabRo.disconnect();
-    if (this._statsRo) this._statsRo.disconnect();
-    window.clearTimeout(this._chromeTimer);
-    if (this._boundScroll) {
-      const list = this.shadowRoot && this.shadowRoot.getElementById("list");
-      if (list) list.removeEventListener("scroll", this._boundScroll);
-      this._boundScroll = null;
-    }
     if (this._boundViewport) {
       window.removeEventListener("resize", this._boundViewport);
       window.removeEventListener("orientationchange", this._boundViewport);
@@ -1805,39 +1719,40 @@ class UnifiAllowlistPanel extends HTMLElement {
         </header>
 
         <div class="head-area">
-          <div class="stats" id="stats"></div>
           <div id="banner"></div>
         </div>
 
         <nav class="tabs" role="tablist" id="tabs"></nav>
 
-        <div class="tools">
-          <div class="search" id="searchbox">
-            <ha-icon icon="mdi:magnify"></ha-icon>
-            <input id="search" type="search" autocomplete="off" spellcheck="false"
-                   aria-label="Search devices"
-                   placeholder="Search name, MAC, IP, SSID, AP or maker">
-            <button class="clear-btn" id="clear" aria-label="Clear search" title="Clear">
-              <ha-icon icon="mdi:close-circle"></ha-icon>
+        <div class="list-scroll" id="list">
+          <div class="stats" id="stats"></div>
+          <div class="tools">
+            <div class="search" id="searchbox">
+              <ha-icon icon="mdi:magnify"></ha-icon>
+              <input id="search" type="search" autocomplete="off" spellcheck="false"
+                     aria-label="Search devices"
+                     placeholder="Search name, MAC, IP, SSID, AP or maker">
+              <button class="clear-btn" id="clear" aria-label="Clear search" title="Clear">
+                <ha-icon icon="mdi:close-circle"></ha-icon>
+              </button>
+            </div>
+            <button class="filter-btn" id="cfg-btn" aria-haspopup="dialog"
+                    aria-label="Settings" title="Settings">
+              <ha-icon icon="mdi:cog-outline"></ha-icon>
+            </button>
+            <button class="filter-btn" id="hist-btn" aria-haspopup="dialog"
+                    aria-label="History" title="History">
+              <ha-icon icon="mdi:history"></ha-icon>
+            </button>
+            <button class="filter-btn" id="filter-btn" aria-haspopup="dialog"
+                    aria-expanded="false" aria-label="Sort and filter">
+              <ha-icon icon="mdi:tune-variant"></ha-icon>
+              <span class="lbl">Sort &amp; filter</span>
+              <span class="dot" id="filter-dot" hidden></span>
             </button>
           </div>
-          <button class="filter-btn" id="cfg-btn" aria-haspopup="dialog"
-                  aria-label="Settings" title="Settings">
-            <ha-icon icon="mdi:cog-outline"></ha-icon>
-          </button>
-          <button class="filter-btn" id="hist-btn" aria-haspopup="dialog"
-                  aria-label="History" title="History">
-            <ha-icon icon="mdi:history"></ha-icon>
-          </button>
-          <button class="filter-btn" id="filter-btn" aria-haspopup="dialog"
-                  aria-expanded="false" aria-label="Sort and filter">
-            <ha-icon icon="mdi:tune-variant"></ha-icon>
-            <span class="lbl">Sort &amp; filter</span>
-            <span class="dot" id="filter-dot" hidden></span>
-          </button>
+          <div id="rows"></div>
         </div>
-
-        <div class="list-scroll" id="list"></div>
 
         <div class="sheet-bd" id="sheet-bd"></div>
         <aside class="sheet" id="sheet" role="dialog" aria-modal="true"
@@ -2102,11 +2017,10 @@ class UnifiAllowlistPanel extends HTMLElement {
         btn.setAttribute("aria-selected", String(btn.dataset.tab === tab));
       }
     }
-    const list = root.getElementById("list");
-    if (list) {
-      list.innerHTML = "";
-      list.scrollTop = 0;
-    }
+    const rowsEl = root.getElementById("rows");
+    if (rowsEl) rowsEl.innerHTML = "";
+    const scroller = root.getElementById("list");
+    if (scroller) scroller.scrollTop = 0;
 
     this._pushTabHist(tab);
 
@@ -2351,7 +2265,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       guard.innerHTML = "";
       root.getElementById("stats").innerHTML = "";
       root.getElementById("tabs").innerHTML = "";
-      root.getElementById("list").innerHTML = this._loading
+      root.getElementById("rows").innerHTML = this._loading
         ? `<div class="empty"><ha-icon icon="mdi:loading" class="spin"></ha-icon>
              <span>Loading devices…</span></div>`
         : "";
@@ -3159,7 +3073,9 @@ class UnifiAllowlistPanel extends HTMLElement {
     // a verdict animation owns the list until it finishes
     if (this._animating) return;
     if (this._hasSelection()) return;
-    const list = this.shadowRoot.getElementById("list");
+    // Rows render into #rows, not the scroller itself: the stat cards and the
+    // pinned search row live in there too and must not be wiped.
+    const list = this.shadowRoot.getElementById("rows");
     let rows = this._rowsForTab();
     const allRows = rows;
     const total = rows.length;
