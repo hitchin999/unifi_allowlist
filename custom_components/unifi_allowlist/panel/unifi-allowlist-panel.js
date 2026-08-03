@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.2";
+const PANEL_VERSION = "1.11.3";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -791,6 +791,15 @@ const STYLES = `
     font-size: 12.5px; font-weight: 550; color: var(--ua-muted);
   }
   .f { display: inline-flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
+  button.f {
+    font: inherit; color: inherit; background: none; border: 0;
+    padding: 1px 5px; margin: -1px -1px -1px -5px;
+    border-radius: 7px; cursor: pointer; text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button.f:hover { background: var(--ua-line); }
+  button.f:active { background: var(--ua-blue-soft); color: var(--ua-blue); }
+  button.f.copied { background: var(--ua-ok-bg); color: var(--ua-ok); }
   .f ha-icon { --mdc-icon-size: 14px; color: var(--ua-off); flex: 0 0 auto; }
   .f.mono { font-family: var(--code-font-family, "Roboto Mono", ui-monospace, monospace); font-size: 12px; }
 
@@ -1564,6 +1573,39 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   /* ---- toast ---- */
 
+  async _copy(text, btn) {
+    let ok = false;
+    try {
+      // Only available in a secure context, which plain http://192.168.x.x
+      // is not - hence the fallback below.
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch (err) {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+        this.shadowRoot.appendChild(ta);
+        ta.select();
+        ok = document.execCommand("copy");
+        ta.remove();
+      } catch (err) {
+        ok = false;
+      }
+    }
+    if (ok && btn) {
+      btn.classList.add("copied");
+      window.setTimeout(() => btn.classList.remove("copied"), 900);
+    }
+    this._notify(ok ? `Copied ${text}` : "Could not copy", ok ? "ok" : "err");
+  }
+
   _notify(msg, kind) {
     this._toast = { msg, kind: kind || "" };
     this._renderToast();
@@ -1858,6 +1900,11 @@ class UnifiAllowlistPanel extends HTMLElement {
     const list = root.getElementById("list");
 
     list.addEventListener("click", (ev) => {
+      const copy = ev.target.closest("button[data-copy]");
+      if (copy) {
+        this._copy(copy.dataset.copy, copy);
+        return;
+      }
       const kebab = ev.target.closest("button.kebab");
       if (kebab) {
         this._openRowMenu(kebab.dataset.mac);
@@ -2886,10 +2933,26 @@ class UnifiAllowlistPanel extends HTMLElement {
     };
   }
 
+  /* True while text is selected inside the panel. Redrawing then throws the
+     selection away mid-drag, which is what made copying a MAC by hand so
+     miserable. Tap to copy is the real answer, but leaving a selection alone
+     costs nothing. */
+  _hasSelection() {
+    try {
+      const sel =
+        (this.shadowRoot.getSelection && this.shadowRoot.getSelection()) ||
+        window.getSelection();
+      return Boolean(sel && !sel.isCollapsed && String(sel).trim());
+    } catch (err) {
+      return false;
+    }
+  }
+
   _renderList() {
     if (!this._data) return;
     // a verdict animation owns the list until it finishes
     if (this._animating) return;
+    if (this._hasSelection()) return;
     const list = this.shadowRoot.getElementById("list");
     let rows = this._rowsForTab();
     const allRows = rows;
@@ -3083,12 +3146,17 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     const detail = (r.fields || [])
       .filter((f) => f.v)
-      .map(
-        (f) =>
-          `<span class="f${f.mono ? " mono" : ""}">${
-            f.icon ? `<ha-icon icon="${f.icon}"></ha-icon>` : ""
-          }${this._esc(f.v)}</span>`
-      )
+      .map((f) => {
+        const inner = `${
+          f.icon ? `<ha-icon icon="${f.icon}"></ha-icon>` : ""
+        }${this._esc(f.v)}`;
+        // Selecting a MAC by dragging is hopeless when the list redraws under
+        // you, so the monospaced identifiers are a tap to copy instead.
+        return f.mono
+          ? `<button class="f mono copyable" data-copy="${this._esc(f.v)}"
+               title="Copy" aria-label="Copy ${this._esc(f.v)}">${inner}</button>`
+          : `<span class="f">${inner}</span>`;
+      })
       .join("");
 
     const btn = (svc, cls, icon, text) =>
