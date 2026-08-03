@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.3";
+const PANEL_VERSION = "1.11.4";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -154,7 +154,15 @@ const STYLES = `
   .wrap {
     position: relative;
     height: 100%;
-    min-height: 100%;
+    /* A mobile browser sizes our container to the viewport as it would be with
+       the address bar hidden, so the foot of the panel - and the floating tab
+       bar pinned to it - ends up below what you can actually see. dvh tracks
+       the height that is visible right now. The offset is however far down the
+       page we start, measured at runtime, and is 0 in the app and on desktop
+       where 100% is already right and this clamp does nothing.
+       min-height is deliberately not set: CSS lets it win over max-height,
+       which would defeat the whole thing. */
+    max-height: calc(100dvh - var(--ua-offset, 0px));
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1023,6 +1031,25 @@ const STYLES = `
     .head-area { padding: 10px 12px; }
     /* four compact tiles in one row rather than a 2x2 block that eats the screen */
     .stats { gap: 7px; }
+
+    /* The stat cards are shortcuts to the same four tabs the bottom bar
+       already carries, counts and all, so they are the first thing worth
+       giving up for reading space. Only the cards: any banner below them is a
+       warning about enforcement and has to stay put. Height is measured rather
+       than guessed. */
+    .stats {
+      transition: margin-top .22s ease, opacity .18s ease;
+    }
+    .wrap.chrome-hidden .head-area { padding-top: 0; padding-bottom: 0; }
+    .wrap.chrome-hidden .head-area:empty { border-bottom: 0; }
+    .wrap.chrome-hidden .stats {
+      margin-top: calc(-1 * var(--ua-stats-h, 0px));
+      opacity: 0;
+      pointer-events: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .stats { transition: none; }
+    }
     .stat {
       flex-direction: column; align-items: center; gap: 3px;
       padding: 9px 4px; border-radius: 14px;
@@ -1327,6 +1354,68 @@ class UnifiAllowlistPanel extends HTMLElement {
   /* The bar is floating, so the list has to reserve room for it. Guessing that
      height in CSS meant a visible dead strip whenever the guess was generous.
      Measuring it keeps the list ending just above the bar on any device. */
+  /* How far below the top of the viewport the panel begins. Only ever nonzero
+     when something is rendered above us. */
+  _measureOffset() {
+    const wrap = this.shadowRoot && this.shadowRoot.querySelector(".wrap");
+    if (!wrap) return;
+    const top = Math.max(0, Math.round(wrap.getBoundingClientRect().top));
+    if (top !== this._offset) {
+      this._offset = top;
+      this.style.setProperty("--ua-offset", `${top}px`);
+    }
+  }
+
+  _watchViewport() {
+    if (this._boundViewport) return;
+    // Showing or hiding the address bar fires on visualViewport, not window.
+    this._boundViewport = () => this._measureOffset();
+    window.addEventListener("resize", this._boundViewport);
+    window.addEventListener("orientationchange", this._boundViewport);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", this._boundViewport);
+    }
+  }
+
+  /* Hide the stat cards while scrolling down, bring them back on the way up
+     or at the top - the pattern every mobile app uses. Desktop keeps them:
+     there is room, and the CSS that collapses them is mobile-only anyway. */
+  _watchScrollChrome() {
+    const list = this.shadowRoot && this.shadowRoot.getElementById("list");
+    const wrap = this.shadowRoot && this.shadowRoot.querySelector(".wrap");
+    const stats = this.shadowRoot && this.shadowRoot.getElementById("stats");
+    if (!list || !wrap || !stats || this._boundScroll) return;
+
+    const measure = () => {
+      const h = stats.getBoundingClientRect().height;
+      // Only while shown, or we would measure the collapsed height and latch
+      // it at zero.
+      if (h > 0 && !wrap.classList.contains("chrome-hidden")) {
+        this.style.setProperty("--ua-stats-h", `${Math.round(h)}px`);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      if (this._statsRo) this._statsRo.disconnect();
+      this._statsRo = new ResizeObserver(measure);
+      this._statsRo.observe(stats);
+    }
+
+    let last = list.scrollTop;
+    this._boundScroll = () => {
+      const top = list.scrollTop;
+      const delta = top - last;
+      // A threshold, so a stray pixel of momentum does not flap the header.
+      if (Math.abs(delta) < 6) return;
+      last = top;
+      const hide = delta > 0 && top > 40;
+      if (hide === wrap.classList.contains("chrome-hidden")) return;
+      wrap.classList.toggle("chrome-hidden", hide);
+      if (!hide) measure();
+    };
+    list.addEventListener("scroll", this._boundScroll, { passive: true });
+  }
+
   _watchTabBar() {
     const tabs = this.shadowRoot && this.shadowRoot.getElementById("tabs");
     if (!tabs || typeof ResizeObserver === "undefined") return;
@@ -1339,6 +1428,9 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._tabRo = new ResizeObserver(apply);
     this._tabRo.observe(tabs);
     apply();
+    this._measureOffset();
+    this._watchViewport();
+    this._watchScrollChrome();
   }
 
   connectedCallback() {
@@ -1359,6 +1451,20 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   disconnectedCallback() {
     if (this._tabRo) this._tabRo.disconnect();
+    if (this._statsRo) this._statsRo.disconnect();
+    if (this._boundScroll) {
+      const list = this.shadowRoot && this.shadowRoot.getElementById("list");
+      if (list) list.removeEventListener("scroll", this._boundScroll);
+      this._boundScroll = null;
+    }
+    if (this._boundViewport) {
+      window.removeEventListener("resize", this._boundViewport);
+      window.removeEventListener("orientationchange", this._boundViewport);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener("resize", this._boundViewport);
+      }
+      this._boundViewport = null;
+    }
     if (this._timer) clearInterval(this._timer);
     if (this._toastTimer) clearTimeout(this._toastTimer);
     window.removeEventListener("popstate", this._boundPop);
