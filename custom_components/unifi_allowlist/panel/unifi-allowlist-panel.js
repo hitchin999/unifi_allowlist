@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.6";
+const PANEL_VERSION = "1.11.7";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -153,16 +153,14 @@ const STYLES = `
 
   .wrap {
     position: relative;
-    height: 100%;
-    /* A mobile browser sizes our container to the viewport as it would be with
-       the address bar hidden, so the foot of the panel - and the floating tab
-       bar pinned to it - ends up below what you can actually see. dvh tracks
-       the height that is visible right now. The offset is however far down the
-       page we start, measured at runtime, and is 0 in the app and on desktop
-       where 100% is already right and this clamp does nothing.
-       min-height is deliberately not set: CSS lets it win over max-height,
-       which would defeat the whole thing. */
-    max-height: calc(100dvh - var(--ua-offset, 0px));
+    /* Sized from the viewport, not from the parent. height: 100% only works
+       while whatever Home Assistant wraps a custom panel in has a definite
+       height of its own, and that is not ours to rely on - when it does not,
+       100% resolves to auto, the panel shrinks to its content, and the tab bar
+       pinned to its foot rides up under the search box until the list loads.
+       dvh also tracks a mobile address bar showing and hiding. The offset is
+       however far down the page we begin, measured at runtime. */
+    height: calc(100dvh - var(--ua-offset, 0px));
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1327,6 +1325,10 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (first) {
       this._loadPrefs();
       this._build();
+      // The panel's height is derived from this, so take it before the first
+      // paint rather than waiting for the tab bar to be measured.
+      this._measureOffset();
+      this._watchViewport();
       this._load();
     }
   }
