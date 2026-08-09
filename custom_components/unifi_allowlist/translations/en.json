@@ -12,16 +12,19 @@
       },
       "site": {
         "title": "Choose the site",
-        "description": "Pick which site to police, and where approval prompts should go. Sites are listed alphabetically.",
+        "description": "Pick which site to police, and where approval prompts should go. Showing {shown} of {total} sites. With a lot of sites, type part of a name in Search and submit to narrow the list, then choose from it.",
         "data": {
           "site": "Site",
-          "notify_service": "Notification targets"
+          "notify_service": "Notification targets",
+          "site_search": "Search"
         }
       }
     },
     "error": {
       "cannot_connect": "Could not reach the controller. Check the URL and port.",
-      "invalid_auth": "The controller rejected that API key."
+      "invalid_auth": "The controller rejected that API key.",
+      "no_site": "Choose a site, or type something in Search to narrow the list.",
+      "no_match": "No site matches that. Clear the search or try fewer words."
     },
     "abort": {
       "already_configured": "That site is already set up."

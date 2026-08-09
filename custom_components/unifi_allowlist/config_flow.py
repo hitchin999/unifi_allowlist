@@ -66,6 +66,29 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+# Below this many sites the dropdown alone is fine; above it, a UniFi OS server
+# hosting hundreds of sites makes an unfiltered combo box unusable.
+SITE_SEARCH_FROM = 20
+CONF_SITE_SEARCH = "site_search"
+
+
+def _match_sites(sites: list[dict], term: str) -> list[dict]:
+    """Sites whose name or description contains every word of the term.
+
+    Words rather than the whole string, so "camp bung" finds "Camp Bungalow"
+    without needing the order or the spacing to match.
+    """
+    words = [w for w in str(term or "").casefold().split() if w]
+    if not words:
+        return list(sites)
+    out = []
+    for site in sites:
+        hay = f"{site.get('desc') or ''} {site.get('name') or ''}".casefold()
+        if all(w in hay for w in words):
+            out.append(site)
+    return out
+
+
 def _as_list(value) -> list[str]:
     """Old entries stored a single notify service as a string."""
     if not value:
@@ -139,6 +162,21 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_site(self, user_input: dict | None = None):
+        errors: dict[str, str] = {}
+        search = getattr(self, "_site_search", "")
+
+        if user_input is not None:
+            search = str(user_input.get(CONF_SITE_SEARCH) or "").strip()
+            self._site_search = search
+            site = user_input.get(CONF_SITE)
+            if not site:
+                # Submitting a search term with nothing picked is how you narrow
+                # the list, so that re-renders quietly. Submitting nothing at all
+                # is a mistake worth naming.
+                if not search:
+                    errors["base"] = "no_site"
+                user_input = None
+
         if user_input is not None:
             site = user_input[CONF_SITE]
             await self.async_set_unique_id(f"{self._creds[CONF_HOST]}::{site}")
@@ -152,23 +190,31 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             options = {CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY))}
             return self.async_create_entry(title=f"Wifi Access ({label})", data=data, options=options)
 
+        all_sites = [s for s in self._sites if s.get("name")]
+        matches = _match_sites(all_sites, search)
         site_options = sorted(
             (
                 {
                     "value": s["name"],
                     "label": f"{s.get('desc') or s['name']} ({s['name']})",
                 }
-                for s in self._sites
-                if s.get("name")
+                for s in matches
             ),
             key=lambda o: o["label"].casefold(),
         ) or [{"value": "default", "label": "default"}]
 
         notify_options = _notify_services(self.hass)
 
+        fields: dict = {}
+        if len(all_sites) >= SITE_SEARCH_FROM:
+            fields[vol.Optional(CONF_SITE_SEARCH, default=search)] = TextSelector()
+            if search and not matches:
+                errors["base"] = "no_match"
+
         schema = vol.Schema(
             {
-                vol.Required(CONF_SITE): SelectSelector(
+                **fields,
+                vol.Optional(CONF_SITE): SelectSelector(
                     SelectSelectorConfig(
                         options=site_options, mode=SelectSelectorMode.DROPDOWN
                     )
@@ -183,7 +229,15 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
             }
         )
-        return self.async_show_form(step_id="site", data_schema=schema)
+        return self.async_show_form(
+            step_id="site",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "total": str(len(all_sites)),
+                "shown": str(len(matches)),
+            },
+        )
 
     @staticmethod
     @callback

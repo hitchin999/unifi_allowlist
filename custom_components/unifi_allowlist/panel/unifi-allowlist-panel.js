@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.11.7";
+const PANEL_VERSION = "1.12.0";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -1733,7 +1733,7 @@ class UnifiAllowlistPanel extends HTMLElement {
               <ha-icon icon="mdi:magnify"></ha-icon>
               <input id="search" type="search" autocomplete="off" spellcheck="false"
                      aria-label="Search devices"
-                     placeholder="Search name, MAC, IP, SSID, AP or maker">
+                     placeholder="Search anything — name, MAC, IP, SSID, AP, maker">
               <button class="clear-btn" id="clear" aria-label="Clear search" title="Clear">
                 <ha-icon icon="mdi:close-circle"></ha-icon>
               </button>
@@ -2464,6 +2464,80 @@ class UnifiAllowlistPanel extends HTMLElement {
       .join("");
   }
 
+  /* ---- searching ---- */
+
+  /* Everything about a row worth matching, as one lowercased string. The MAC
+     goes in twice, with and without separators, so a4:83:e7, a4-83-e7 and
+     a483e7 all find the same device - which matters when you are pasting one
+     in from somewhere else. */
+  static _haystack(r) {
+    const mac = String(r.mac || "");
+    const parts = [
+      r.name,
+      r.label,
+      mac,
+      mac.replace(/[^a-z0-9]/gi, ""),
+      r.ip,
+      r.vendor,
+      r.ap,
+      r.ssid,
+      r.band,
+      ...(r.fields || []).map((f) => f && f.v),
+      ...(r.chips || []).map((c) => c && c.v),
+    ];
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
+  /* The individual fields, for the looser pass. Kept separate on purpose: a
+     subsequence spanning the whole haystack would match nearly anything. */
+  static _fields(r) {
+    return [r.name, r.label, r.mac, r.vendor, r.ap, r.ssid, r.ip]
+      .filter(Boolean)
+      .map((v) => String(v).toLowerCase());
+  }
+
+  /* Are needle's characters present in order? "cnnb" matches "Canonb1750d". */
+  static _subsequence(hay, needle) {
+    let i = 0;
+    for (let n = 0; n < hay.length && i < needle.length; n += 1) {
+      if (hay[n] === needle[i]) i += 1;
+    }
+    return i === needle.length;
+  }
+
+  _search(rows, query) {
+    const terms = String(query || "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((t) => ({ raw: t, bare: t.replace(/[^a-z0-9]/g, "") }));
+    if (!terms.length) return rows;
+
+    const hit = (hay, t) =>
+      hay.includes(t.raw) || (t.bare.length > 1 && hay.includes(t.bare));
+
+    // Every word has to appear somewhere, in any order: "kitchen canon" and
+    // "canon kitchen" find the same row.
+    const strict = rows.filter((r) => {
+      const hay = UnifiAllowlistPanel._haystack(r);
+      return terms.every((t) => hit(hay, t));
+    });
+    if (strict.length) return strict;
+
+    // Nothing matched exactly, so try harder rather than showing an empty list.
+    // Only for terms long enough to mean something, and each term has to fit
+    // inside a single field.
+    const loose = terms.filter((t) => t.bare.length >= 3);
+    if (loose.length !== terms.length) return strict;
+
+    return rows.filter((r) => {
+      const fields = UnifiAllowlistPanel._fields(r);
+      return loose.every((t) =>
+        fields.some((f) => UnifiAllowlistPanel._subsequence(f, t.bare))
+      );
+    });
+  }
+
   /* ---- sorting and filtering ---- */
 
   _sortKey() {
@@ -3086,16 +3160,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     rows = this._sortRows(rows);
 
     if (this._query) {
-      const q = this._query;
-      rows = rows.filter(
-        (r) =>
-          r.mac.includes(q) ||
-          (r.name || "").toLowerCase().includes(q) ||
-          (r.vendor || "").toLowerCase().includes(q) ||
-          (r.ap || "").toLowerCase().includes(q) ||
-          (r.fields || []).some((f) => (f.v || "").toLowerCase().includes(q)) ||
-          (r.chips || []).some((c) => c && (c.v || "").toLowerCase().includes(q))
-      );
+      rows = this._search(rows, this._query);
     }
 
     const dot = this.shadowRoot.getElementById("filter-dot");
