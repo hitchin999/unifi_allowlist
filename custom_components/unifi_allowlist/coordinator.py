@@ -200,6 +200,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # or the arrivals that tripped the "too many at once" brake.
         self.candidates: list[dict] = []
         self.breaker_rows: list[dict] = []
+        # MAC -> why it is never blocked. Rebuilt every poll; every block goes
+        # through _safe_block, which refuses anything in here.
+        self._protected: dict[str, str] = {}
         self._spared_logged: set[str] = set()
 
         super().__init__(
@@ -623,6 +626,8 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             self._own_ips = await self.hass.async_add_executor_job(
                 _own_ips, self.client.host
             )
+        # Before anything that can block: the sync, enforcement, a review.
+        await self._guard_protected(known, active)
 
         self._trim_last_seen()
         # Learning blocks nothing at all - including re-applying or adopting
@@ -1221,7 +1226,59 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     def learning_notice_id(self) -> str:
         return f"{DOMAIN}_learning_{self.entry_id}"
 
+    async def _guard_protected(self, known: list[dict], active: list[dict]) -> None:
+        """Find the never-blocked devices, and undo any block already on them.
+
+        Protection used to be checked only where new arrivals are blocked, so
+        a block from anywhere else - by hand, a deny, an earlier version - was
+        adopted by the sync and then re-applied every poll, locking the Home
+        Assistant host off the network. Any such block is lifted here and the
+        device dropped from Waiting and Blocked, so nothing re-applies it.
+        """
+        protected: dict[str, str] = {}
+        blocked: set[str] = set()
+        for rec in list(known or []) + list(active or []):
+            mac = _norm_mac(rec.get("mac"))
+            if not mac:
+                continue
+            if why := self._spared(mac, rec):
+                protected[mac] = why
+                if rec.get("blocked"):
+                    blocked.add(mac)
+        self._protected = protected
+
+        for mac, why in protected.items():
+            held = self.store.is_denied(mac) or self.store.is_pending(mac)
+            if not held and mac not in blocked:
+                continue
+            if held:
+                self.store.denied.pop(mac, None)
+                self.store.pending.pop(mac, None)
+                await self.store.async_save()
+                await self.store.async_close_id(mac)
+                await self.async_clear_notification(mac)
+            if mac in blocked:
+                await self._safe_unblock(mac)
+            _LOGGER.warning(
+                "%s (%s) was blocked or held for review; it is never blocked, "
+                "so the block was lifted",
+                mac,
+                why,
+            )
+            await self.async_record("allowed", mac, why, "protection")
+            await self._notify_plain(
+                "UniFi Allow List",
+                f"Unblocked {why} ({mac}). It is never blocked, because that "
+                "would cut Home Assistant off from the controller.",
+                icon="mdi:shield-lock-outline",
+            )
+
     async def _safe_block(self, mac: str) -> None:
+        if why := self._protected.get(_norm_mac(mac)):
+            # The one gate every block passes through, so nothing - a deny, a
+            # review, the sync - can lock this host off the network.
+            _LOGGER.warning("refusing to block %s: it is %s", mac, why)
+            return
         try:
             await self.client.block(mac)
         except UnifiError as err:
@@ -1531,6 +1588,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             # Wired gear is out of scope unless opted in, and then it must not
             # be dragged in here either.
             if rec.get("is_wired") and not self.include_wired:
+                continue
+            # Never adopted, never re-blocked. See _guard_protected.
+            if mac in self._protected:
                 continue
             if rec.get("blocked"):
                 on_controller.add(mac)

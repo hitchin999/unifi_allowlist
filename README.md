@@ -262,7 +262,10 @@ Three things are never blocked, whatever the lists say: the controller, the
 Home Assistant host (the address it uses to reach the controller), and UniFi
 devices themselves. The panel tags them **never blocked** with the reason, and
 leaves them out of the unknown counts and **Allow all**, since there is no
-decision to make about them. Blocking any of them could cut Home Assistant off from the
+decision to make about them. The protection is a hard veto on every block the
+integration makes, including the sync with UniFi, and if one of them is ever
+found blocked or sitting in Waiting or Blocked, the block is lifted and you get
+a notification saying so. Blocking any of them could cut Home Assistant off from the
 controller it needs to undo the block. Anything else you cannot afford to lose
 — a NAS, a DNS server, a hypervisor — should be on the allow list before you
 switch this on.
