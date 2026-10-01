@@ -46,6 +46,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SITE,
     CONF_SSIDS,
+    CONF_INCLUDE_WIRED,
+    DEFAULT_INCLUDE_WIRED,
     CONF_VERIFY_SSL,
     DEFAULT_ADOPT_BLOCKS,
     DEFAULT_DENY_UNNAMED,
@@ -316,6 +318,10 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                         custom_value=True,
                     )
                 ),
+                vol.Optional(
+                    CONF_INCLUDE_WIRED,
+                    default=current.get(CONF_INCLUDE_WIRED, DEFAULT_INCLUDE_WIRED),
+                ): bool,
                 vol.Optional(
                     CONF_DENY_NAMES, default=current.get(CONF_DENY_NAMES, [])
                 ): SelectSelector(

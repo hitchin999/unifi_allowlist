@@ -28,7 +28,7 @@ This integration is the middle path: no extra infrastructure, at the cost of a s
 - **Sidebar panel** — waiting queue, live clients, allow list, deny list, all searchable by name, MAC or IP
 - **SSID scoping** — police your IoT network and leave the guest network alone
 - **Catches short visits** — reads recently-seen clients, not just currently connected, so a device that joins for thirty seconds still gets caught
-- **Wired devices are never touched** — a client must explicitly report as wireless before anything happens to it
+- **Wired devices are left alone by default** — a client must explicitly report as wireless before anything happens to it, unless you opt in to [policing wired clients](#wired-clients) too
 - **Learns device names** from the controller, and lets you override them with your own
 - **Shows where** — IP, SSID, access point and radio band, in the panel and in the notification
 - **Safety rails** — refuses to enforce if the allow list looks truncated, and stops blocking entirely if an implausible number of unknown devices appear at once
@@ -88,6 +88,7 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 |---|---|---|
 | Notification target | — | Which `notify.*` service receives prompts |
 | Only police these SSIDs | all | Restrict enforcement to specific networks |
+| Also police wired clients | off | Apply the same approve-or-deny flow to devices on a cable |
 | Block on sight, then ask | on | Off means notify only, never block |
 | Check every | 30 s | Poll interval |
 | Also catch devices seen within | 600 s | Lookback window for short visits |
@@ -227,9 +228,45 @@ are not stored twice; the waiting queue is the same records, flagged.
 From the Denied tab an awaiting-review row offers Allow (let it on and drop the
 block), Deny (confirm the block and clear it from the queue) or Forget.
 
-The match is over **wireless clients only**. Wired clients are outside this
-integration's scope everywhere else and are never adopted or blocked here, so
+The match is over **wireless clients only**, unless wired clients are being
+policed. With that off, wired clients are never adopted or blocked here, so
 UniFi's blocked count includes any wired blocks that this will not touch.
+
+## Wired clients
+
+Off by default. **Also police wired clients** in the options (or the panel's
+settings sheet) puts devices plugged into a cable through the same flow as wifi:
+blocked on sight, a notification with Allow and Keep blocked, and the same
+allow and deny lists. They show **Wired** where a wifi client shows its SSID,
+and the switch and port in place of the access point, so the network filter
+picks them out on their own.
+
+Seed first, exactly as on a fresh install. Every server, printer, TV and
+console you own is unknown the moment this is switched on, so:
+
+1. Turn off `switch.enforcement`
+2. Turn on **Also police wired clients**
+3. Wait for the wired devices to appear on the **On wifi now** tab, then press **Allow all**
+4. Turn enforcement back on
+
+Skip that and the "too many at once" guard trips and blocks nothing at all,
+wifi included, until it is sorted out.
+
+The SSID list narrows wifi only. While wired clients are on they are all
+policed, whatever that list says.
+
+Three things are never blocked, whatever the lists say: the controller, the
+Home Assistant host (the address it uses to reach the controller), and UniFi
+devices themselves. Blocking any of them could cut Home Assistant off from the
+controller it needs to undo the block. Anything else you cannot afford to lose
+— a NAS, a DNS server, a hypervisor — should be on the allow list before you
+switch this on.
+
+A wired block is enforced by UniFi, so it only reaches as far as UniFi does: a
+device behind a third-party switch can still talk to its neighbours on that
+switch, and how much a block stops on your hardware is the controller's
+business rather than this integration's. Check it on one device before relying
+on it.
 
 ## Polling
 

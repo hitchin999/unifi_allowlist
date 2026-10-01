@@ -27,6 +27,7 @@ CONF_SMS_LINE = "sms_line"
 CONF_SMS_PIN = "sms_pin"
 CONF_SMS_DIGEST = "sms_digest"
 CONF_NOTIFY_GAP = "notify_gap"
+CONF_INCLUDE_WIRED = "include_wired"
 
 # The connected-client list is small and now runs on its own schedule, so this
 # no longer drags the expensive call along with it. 15s halves the window an
@@ -40,6 +41,12 @@ DEFAULT_ADOPT_BLOCKS = True
 DEFAULT_FORGET_IN_UNIFI = True
 DEFAULT_DENY_UNNAMED = False
 DEFAULT_SMS_DIGEST = False
+# Off by default: wired clients are servers, printers, the Home Assistant box
+# itself. Opting in polices them exactly like wifi clients.
+DEFAULT_INCLUDE_WIRED = False
+# What a wired client shows in place of an SSID, so the panel's network filter,
+# notifications and stored records all carry it without special cases.
+WIRED_LABEL = "Wired"
 
 # --- SMS bridge (Telebroad SMS Commander) --------------------------------
 # Off, and invisible, unless you turn it on here. Nothing about SMS appears in

@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.12.0";
+const PANEL_VERSION = "1.13.0";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -2780,6 +2780,8 @@ class UnifiAllowlistPanel extends HTMLElement {
        "Clients with an alias or a fixed IP are only unblocked."],
       ["deny_unnamed", "toggle", "Always block devices that report no name",
        "Catches cameras and IoT gear too. Check the waiting list first."],
+      ["include_wired", "toggle", "Also police wired clients",
+       "Turn blocking off first, then Allow all once your wired devices show up, or every server and printer trips the safety brake."],
     ];
   }
 
@@ -3018,7 +3020,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         status: r.live ? r.status : "off",
         chips: [
           r.band ? { v: r.band, cls: "net", icon: "mdi:access-point" } : null,
-          r.ssid ? { v: r.ssid, cls: "net", icon: "mdi:wifi" } : null,
+          r.ssid ? { v: r.ssid, cls: "net", icon: UnifiAllowlistPanel._netIcon(r.ssid) } : null,
           r.in_scope ? null : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
           r.live ? null : UnifiAllowlistPanel._lastSeenChip(r.last_seen),
           r.vendor ? { v: r.vendor, cls: "off", icon: "mdi:factory" } : null,
@@ -3026,7 +3028,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         fields: [
           { v: r.mac, mono: true, icon: "mdi:identifier" },
           { v: r.ip, mono: true, icon: "mdi:ip-network-outline" },
-          { v: r.ap, icon: "mdi:router-wireless" },
+          { v: r.ap, icon: r.ssid === "Wired" ? "mdi:lan" : "mdi:router-wireless" },
           {
             v: r.signal != null ? `${r.signal} dBm` : "",
             icon: UnifiAllowlistPanel._signalIcon(r.signal),
@@ -3050,7 +3052,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         status: "unknown",
         chips: [
           p.band ? { v: p.band, cls: "net", icon: "mdi:access-point" } : null,
-          p.ssid ? { v: p.ssid, cls: "net", icon: "mdi:wifi" } : null,
+          p.ssid ? { v: p.ssid, cls: "net", icon: UnifiAllowlistPanel._netIcon(p.ssid) } : null,
           p.live
             ? { v: "still connected", cls: "unknown", icon: "mdi:lan-connect" }
             : { v: "gone offline", cls: "off", icon: "mdi:lan-disconnect" },
@@ -3060,7 +3062,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         fields: [
           { v: p.mac, mono: true, icon: "mdi:identifier" },
           { v: p.ip, mono: true, icon: "mdi:ip-network-outline" },
-          { v: p.ap, icon: "mdi:router-wireless" },
+          { v: p.ap, icon: p.ssid === "Wired" ? "mdi:lan" : "mdi:router-wireless" },
         ],
       }));
     }
@@ -3387,6 +3389,11 @@ class UnifiAllowlistPanel extends HTMLElement {
       if (re.test(n)) return icon;
     }
     return "mdi:lan-connect";
+  }
+
+  // Wired clients carry "Wired" where a wifi client has its SSID.
+  static _netIcon(ssid) {
+    return ssid === "Wired" ? "mdi:ethernet" : "mdi:wifi";
   }
 
   static _signalIcon(dbm) {
