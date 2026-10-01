@@ -280,6 +280,7 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         networks: list[str] = []
+        note = ""
         session = async_get_clientsession(
             self.hass, verify_ssl=self._creds.get(CONF_VERIFY_SSL, False)
         )
@@ -291,13 +292,33 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._creds.get(CONF_VERIFY_SSL, False),
         )
         try:
+            wlans = await client.wlans()
             networks = sorted(
-                {str(w.get("name")) for w in await client.wlans() if w.get("name")},
+                {
+                    str(w.get("name"))
+                    for w in (wlans if isinstance(wlans, list) else [])
+                    if isinstance(w, dict) and w.get("name")
+                },
                 key=str.casefold,
             )
+            if not networks:
+                _LOGGER.warning(
+                    "no wifi networks listed for site %s: %r",
+                    picked["site"],
+                    wlans if not isinstance(wlans, list) else f"{len(wlans)} rows",
+                )
+                note = (
+                    "\n\nNo wifi networks were found for this site. Leave the "
+                    "list empty to watch every network, or type a network name."
+                )
         except UnifiError as err:
-            # Not fatal: leaving the list empty watches every network.
-            _LOGGER.debug("could not list wifi networks: %s", err)
+            # Not fatal: leaving the list empty watches every network. Said on
+            # the form, so a failure is visible rather than an empty list.
+            _LOGGER.warning("could not list wifi networks for %s: %s", picked["site"], err)
+            note = (
+                f"\n\nCould not read this site's wifi networks ({err}). Leave the "
+                "list empty to watch every network, or type a network name."
+            )
 
         schema = vol.Schema(
             {
@@ -317,7 +338,7 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="networks",
             data_schema=schema,
-            description_placeholders={"site": picked["label"]},
+            description_placeholders={"site": picked["label"], "note": note},
         )
 
 

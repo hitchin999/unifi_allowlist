@@ -21,7 +21,7 @@
       },
       "networks": {
         "title": "What to watch",
-        "description": "UniFi Allow List watches devices that join your wifi at {site}, and can watch wired devices too. Nothing is blocked straight away: it first learns the devices already on your network, and you review that list in the UniFi Allow List panel before protection starts.",
+        "description": "UniFi Allow List watches devices that join your wifi at {site}, and can watch wired devices too. Nothing is blocked straight away: it first learns the devices already on your network, and you review that list in the UniFi Allow List panel before protection starts.{note}",
         "data": {
           "enforced_ssids": "Wifi networks to watch",
           "include_wired": "Also watch wired devices"
