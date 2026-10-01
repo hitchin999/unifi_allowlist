@@ -27,7 +27,7 @@
           "include_wired": "Also watch wired devices"
         },
         "data_description": {
-          "enforced_ssids": "Tick the networks to watch. Leave them all unticked to watch every network - or tick only, say, the IoT network and leave the guest network alone.",
+          "enforced_ssids": "Every network is ticked, which watches them all, including networks you add later. Untick one, such as a guest network, to leave devices joining it alone. Blocking happens on the whole site, not per network: a device blocked because it joined a watched network is blocked on every network here, including ones you left unticked.",
           "include_wired": "Off watches wifi only. On also covers devices plugged into a cable, such as TVs, printers and servers."
         }
       }
@@ -36,7 +36,8 @@
       "cannot_connect": "Could not reach the controller. Check the URL and port.",
       "invalid_auth": "The controller rejected that API key.",
       "no_site": "Choose a site, or type something in Search to narrow the list.",
-      "no_match": "No site matches that. Clear the search or try fewer words."
+      "no_match": "No site matches that. Clear the search or try fewer words.",
+      "no_network": "Tick at least one wifi network."
     },
     "abort": {
       "already_configured": "That site is already set up."
@@ -48,7 +49,7 @@
         "title": "UniFi Allow List settings",
         "data": {
           "notify_service": "Phones to notify",
-          "enforced_ssids": "Wifi networks to watch (leave empty for all)",
+          "enforced_ssids": "Wifi networks to watch",
           "include_wired": "Also watch wired devices",
           "block_first": "Block new devices until you answer",
           "scan_interval": "Check every",
@@ -80,9 +81,13 @@
           "sms_digest": "One text listing several devices instead of one text each. Useful on a busy night; off means every device gets its own message.",
           "scan_interval": "How often the connected-device list is read. This is the small, cheap call, so lowering it shortens the window an unknown device has before it is blocked without much extra load. The full client list refreshes once a minute regardless. Going below about 15s risks a busy run overlapping the next poll; lower the pause between alerts too if you do.",
           "max_per_run": "If more new devices than this appear in one check, nothing is blocked and you are asked to review them in the panel instead.",
-          "block_first": "Off means a new device is reported but left connected."
+          "block_first": "Off means a new device is reported but left connected.",
+          "enforced_ssids": "All ticked watches every network, including ones added later. Untick a network to leave devices joining it alone. Blocking happens on the whole site, not per network: a device blocked because it joined a watched network is blocked on every network here, including ones you left unticked."
         }
       }
+    },
+    "error": {
+      "no_network": "Tick at least one wifi network."
     }
   }
 }
