@@ -108,7 +108,8 @@ prune:
   name: Prune stale devices
   description: >-
     Forget offline wireless clients on the controller and drop them from the
-    allow list. Wired devices, denied devices and pending devices are skipped.
+    allow list. Wired devices are skipped unless wired clients are being
+    policed; denied and pending devices are always skipped.
   fields:
     days:
       name: Not seen for (days)

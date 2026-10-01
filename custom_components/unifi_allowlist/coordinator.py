@@ -6,8 +6,10 @@ import asyncio
 import fnmatch
 import logging
 import re
+import socket
 import time
 from datetime import timedelta
+from urllib.parse import urlparse
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -34,7 +36,10 @@ from .const import (
     CONF_SITE,
     CONF_SCAN_INTERVAL,
     CONF_SSIDS,
+    CONF_INCLUDE_WIRED,
     DEFAULT_ADOPT_BLOCKS,
+    DEFAULT_INCLUDE_WIRED,
+    WIRED_LABEL,
     KNOWN_REFRESH,
     LAST_SEEN_CAP,
     PANEL_URL_PATH,
@@ -103,6 +108,29 @@ def _serves_wifi(dev: dict) -> bool:
     return bool(dev.get("radio_table"))
 
 
+def _own_ips(host: str) -> set[str]:
+    """Addresses this machine and the controller answer on.
+
+    A UDP connect sends nothing; it only asks the kernel which local address
+    would be used to reach the controller, which is the one UniFi sees for the
+    Home Assistant host. Blocking either of these would cut the integration off
+    from the very controller it needs to undo the block.
+    """
+    ips: set[str] = set()
+    name = urlparse(host).hostname or ""
+    if not name:
+        return ips
+    try:
+        target = socket.gethostbyname(name)
+        ips.add(target)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect((target, 9))
+            ips.add(sock.getsockname()[0])
+    except OSError as err:
+        _LOGGER.debug("could not work out local addresses: %s", err)
+    return ips
+
+
 class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     """Polls the controller, decides what is unknown, and acts on it."""
 
@@ -151,6 +179,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # decide whether the client has an alias or a fixed IP.
         self._known_cache: list[dict] = []
         self._known_cache_at = 0.0
+        # Filled on first poll; see _own_ips.
+        self._own_ips: set[str] | None = None
+        self._spared_logged: set[str] = set()
 
         super().__init__(
             hass,
@@ -485,6 +516,39 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
     def enforced_ssids(self) -> list[str]:
         return self._opt(CONF_SSIDS, []) or []
 
+    @property
+    def include_wired(self) -> bool:
+        return bool(self._opt(CONF_INCLUDE_WIRED, DEFAULT_INCLUDE_WIRED))
+
+    def _covers(self, rec: dict) -> bool:
+        """Whether this client is ours to police at all.
+
+        Wifi needs is_wired to be explicitly False - a record that does not say
+        is never assumed to be wireless. Wired clients only when opted in.
+        """
+        wired = rec.get("is_wired")
+        if wired is False:
+            return True
+        return wired is True and self.include_wired
+
+    def _spared(self, mac: str, rec: dict) -> bool:
+        """Never block the controller, this host, or UniFi gear itself.
+
+        Only reachable with wired clients on - none of these join over wifi -
+        but checked regardless, since blocking any of them would cut the
+        integration off from the controller it needs to undo the block.
+        """
+        ip = rec.get("ip") or rec.get("last_ip") or ""
+        hit = mac in self.ap_names or (ip and ip in (self._own_ips or set()))
+        if hit and mac not in self._spared_logged:
+            self._spared_logged.add(mac)
+            _LOGGER.info(
+                "never blocking %s (%s): controller, this host or UniFi gear",
+                mac,
+                ip,
+            )
+        return bool(hit)
+
     def apply_options(self) -> None:
         self.update_interval = timedelta(
             seconds=self._opt(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
@@ -531,6 +595,11 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if self._controller_name is None:
             await self._refresh_controller_name()
 
+        if self._own_ips is None:
+            self._own_ips = await self.hass.async_add_executor_job(
+                _own_ips, self.client.host
+            )
+
         self._trim_last_seen()
         await self._auto_sync()
         await self._flush_notify_backlog()
@@ -547,10 +616,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         cutoff = int(time.time()) - lookback
 
         # Devices seen recently, including ones that already disconnected.
-        # is_wired must be explicitly False - never risk touching wired gear.
+        # Wired gear only when opted in - see _covers.
         seen: dict[str, dict] = {}
         for rec in known:
-            if rec.get("is_wired") is not False:
+            if not self._covers(rec):
                 continue
             mac = str(rec.get("mac", "")).lower()
             if not mac:
@@ -567,7 +636,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         live: set[str] = set()
         online: list[dict] = []
         for rec in active:
-            if rec.get("is_wired"):
+            if rec.get("is_wired") and not self.include_wired:
                 continue
             mac = str(rec.get("mac", "")).lower()
             if not mac:
@@ -582,7 +651,11 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             online, key=lambda r: (r["status"] != "unknown", (r["name"] or "zzz").lower())
         )
 
-        unknown = [m for m in seen if not self.store.is_allowed(m)]
+        unknown = [
+            m
+            for m in seen
+            if not self.store.is_allowed(m) and not self._spared(m, seen[m])
+        ]
         in_scope = [m for m in unknown if self._in_scope(seen[m])]
 
         if self.enforcing:
@@ -699,14 +772,26 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             self.wireless_aps = radios
 
     def _ap_of(self, rec: dict) -> str:
-        """Live records give the AP MAC. Lookback records give its name."""
-        ap_mac = str(rec.get("ap_mac") or rec.get("last_uplink_mac") or "").lower()
+        """Live records give the AP MAC. Lookback records give its name.
+
+        A wired client gives the switch instead, with the port when known.
+        """
+        ap_mac = str(
+            rec.get("ap_mac") or rec.get("sw_mac") or rec.get("last_uplink_mac") or ""
+        ).lower()
         if ap_mac and ap_mac in self.ap_names:
-            return self.ap_names[ap_mac]
-        return rec.get("last_uplink_name") or ap_mac or ""
+            where = self.ap_names[ap_mac]
+        else:
+            where = rec.get("last_uplink_name") or ap_mac or ""
+        port = rec.get("sw_port") or rec.get("last_uplink_remote_port")
+        if where and port and rec.get("is_wired"):
+            where = f"{where} port {port}"
+        return where
 
     @staticmethod
     def _band_of(rec: dict) -> str:
+        if rec.get("is_wired"):
+            return ""
         radio = rec.get("radio") or rec.get("last_radio") or ""
         return {"na": "5 GHz", "ng": "2.4 GHz", "6e": "6 GHz", "ax": "6 GHz"}.get(
             radio, ""
@@ -724,9 +809,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
     def _ssid_of(self, rec: dict) -> str:
         """Live records carry essid. Lookback records only have wlanconf_id."""
+        if rec.get("is_wired"):
+            return WIRED_LABEL
         return rec.get("essid") or self.wlan_names.get(rec.get("wlanconf_id", ""), "")
 
     def _in_scope(self, rec: dict) -> bool:
+        # The SSID list narrows wifi only. Wired clients are policed as a whole
+        # once the option is on, since there is no network name to pick from.
+        if rec.get("is_wired"):
+            return self.include_wired
         scope = self.enforced_ssids
         if not scope:
             return True
@@ -789,7 +880,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             "live": is_live,
             "last_seen": self._last_seen_of(mac, rec, is_live),
             "vendor": str(rec.get("oui") or "") or self.vendors.get(mac, ""),
-            "in_scope": self._in_scope(rec),
+            "in_scope": self._in_scope(rec) and not self._spared(mac, rec),
             "status": status,
         }
 
@@ -914,7 +1005,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 name,
                 ssid,
                 rec.get("signal", "?"),
-                "on wifi now" if mac in live else "already disconnected",
+                ("connected now" if rec.get("is_wired") else "on wifi now")
+                if mac in live
+                else "already disconnected",
                 blocked=block_first,
                 ip=ip,
                 ap=ap,
@@ -1008,15 +1101,20 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             }
         )
 
-        title = "Blocked a new device" if blocked else "New device on wifi"
+        wired = ssid == WIRED_LABEL
+        title = (
+            "Blocked a new device"
+            if blocked
+            else "New wired device" if wired else "New device on wifi"
+        )
         if self._multi_site:
             title = f"{title} - {self.site_title}"
         lines = [name, mac]
         if ip:
             lines.append(f"IP: {ip}")
-        lines.append(f"SSID: {ssid}   signal: {signal}")
+        lines.append("Wired" if wired else f"SSID: {ssid}   signal: {signal}")
         if ap:
-            lines.append(f"AP: {ap}")
+            lines.append(f"{'Switch' if wired else 'AP'}: {ap}")
         lines.append(where)
         message = "\n".join(lines)
 
@@ -1223,9 +1321,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             mac = str(rec.get("mac") or "").lower()
             if not mac:
                 continue
-            # Wired gear is out of scope for this integration everywhere else,
-            # so it must not be dragged in here either.
-            if rec.get("is_wired"):
+            # Wired gear is out of scope unless opted in, and then it must not
+            # be dragged in here either.
+            if rec.get("is_wired") and not self.include_wired:
                 continue
             if rec.get("blocked"):
                 on_controller.add(mac)
@@ -1415,7 +1513,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         return len(blocked)
 
     async def async_prune(self, days: int = 7, dry_run: bool = True) -> dict:
-        """Forget stale offline wireless clients, in UniFi and in the allow list."""
+        """Forget stale offline clients, in UniFi and in the allow list.
+
+        Wireless only, plus wired when wired clients are being policed.
+        """
         try:
             active, known = await asyncio.gather(
                 self.client.active_clients(), self.client.known_clients()
@@ -1429,7 +1530,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         doomed = []
         for rec in known:
-            if rec.get("is_wired") is not False:
+            if not self._covers(rec):
                 continue
             mac = str(rec.get("mac", "")).lower()
             if not mac or mac in online:

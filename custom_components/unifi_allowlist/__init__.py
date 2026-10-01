@@ -42,6 +42,7 @@ from .const import (
     CONF_DENY_UNNAMED,
     CONF_DENY_NAMES,
     CONF_SSIDS,
+    CONF_INCLUDE_WIRED,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_MAX_PER_RUN,
     DEFAULT_NOTIFY_GAP,
@@ -507,6 +508,7 @@ class UnifiAllowlistOptionsView(HomeAssistantView):
         CONF_DENY_UNNAMED: bool,
         CONF_DENY_NAMES: list,
         CONF_SSIDS: list,
+        CONF_INCLUDE_WIRED: bool,
     }
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -711,6 +713,7 @@ class UnifiAllowlistDataView(HomeAssistantView):
                     ),
                     CONF_DENY_NAMES: list(coord.deny_name_patterns),
                     CONF_SSIDS: list(coord._opt(CONF_SSIDS, []) or []),
+                    CONF_INCLUDE_WIRED: coord.include_wired,
                 },
             }
         )
