@@ -102,7 +102,11 @@ PANEL_URL_PATH = "wifi-access"
 # Matches the panel JS, which reads the tab from the URL fragment.
 HASH_PREFIX = "#ual-"
 PANEL_ASSET = "unifi-allowlist-panel.js"
-PANEL_TITLE = "Wifi Access"
+PANEL_TITLE = "UniFi Allow List"
+# Config entry title, as in "UniFi Allow List (7 Houston Ave)". Entries made by
+# older versions carry the old prefix and are renamed on load.
+ENTRY_TITLE = "UniFi Allow List"
+OLD_ENTRY_PREFIX = "Wifi Access ("
 PANEL_ICON = "mdi:wifi-lock"
 STATIC_URL = "/unifi_allowlist_static"
 
@@ -123,6 +127,17 @@ SERVICE_FORGET_OFFLINE = "forget_offline_pending"
 SERVICE_SYNC = "sync_from_unifi"
 SERVICE_UNBLOCK_UNTRACKED = "unblock_untracked"
 SERVICE_ACCEPT_LIST_SIZE = "accept_list_size"
+SERVICE_APPLY_REVIEW = "apply_review"
+ATTR_TRUST = "trust"
+ATTR_BLOCK = "block"
+
+# --- learning (first run) --------------------------------------------------
+# A new site watches before it blocks. It collects every client seen within
+# this many days, so a phone that is out of the house still makes the list,
+# and blocks nothing until the list has been reviewed in the panel.
+LEARN_DAYS = 7
+# One reminder if setup is still unfinished after this long.
+LEARN_REMIND_AFTER = 86400
 
 ATTR_SITE = "site"
 ATTR_REBLOCK = "reblock"

@@ -63,6 +63,7 @@ from .const import (
     DEFAULT_NOTIFY_GAP,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    ENTRY_TITLE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +99,15 @@ def _as_list(value) -> list[str]:
     if isinstance(value, str):
         return [value]
     return [v for v in value if v]
+
+
+def _phones(services: list[str]) -> list[str]:
+    """The companion-app targets, ticked by default at setup.
+
+    Approve and deny buttons only work there, so they are nearly always what
+    somebody wants; the full list is still offered.
+    """
+    return [s for s in services if s.startswith("mobile_app_")]
 
 
 def _notify_services(hass) -> list[str]:
@@ -189,8 +199,13 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 site,
             )
             data = {**self._creds, CONF_SITE: site}
-            options = {CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY))}
-            return self.async_create_entry(title=f"Wifi Access ({label})", data=data, options=options)
+            options = {
+                CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY)),
+                CONF_INCLUDE_WIRED: bool(user_input.get(CONF_INCLUDE_WIRED, False)),
+            }
+            return self.async_create_entry(
+                title=f"{ENTRY_TITLE} ({label})", data=data, options=options
+            )
 
         all_sites = [s for s in self._sites if s.get("name")]
         matches = _match_sites(all_sites, search)
@@ -221,7 +236,9 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         options=site_options, mode=SelectSelectorMode.DROPDOWN
                     )
                 ),
-                vol.Optional(CONF_NOTIFY, default=[]): SelectSelector(
+                vol.Optional(
+                    CONF_NOTIFY, default=_phones(notify_options)
+                ): SelectSelector(
                     SelectSelectorConfig(
                         options=notify_options,
                         mode=SelectSelectorMode.DROPDOWN,
@@ -229,6 +246,9 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         multiple=True,
                     )
                 ),
+                vol.Optional(
+                    CONF_INCLUDE_WIRED, default=DEFAULT_INCLUDE_WIRED
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(

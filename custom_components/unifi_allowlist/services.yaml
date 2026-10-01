@@ -307,3 +307,37 @@ accept_list_size:
       selector:
         config_entry:
           integration: unifi_allowlist
+
+apply_review:
+  name: Apply a device review
+  description: >-
+    Trust some devices and hold the rest for a decision, in one go. While the
+    site is still learning (first run), this also finishes setup and starts
+    protecting. Held devices are blocked when "Block on sight" is on, and
+    queued in Waiting either way.
+  fields:
+    trust:
+      name: Trust
+      description: MAC addresses to add to the allow list.
+      required: false
+      example: '["a4:83:e7:12:34:56"]'
+      selector:
+        text:
+          multiple: true
+    block:
+      name: Hold for review
+      description: MAC addresses to block and queue in Waiting.
+      required: false
+      example: '["de:ad:be:ef:00:01"]'
+      selector:
+        text:
+          multiple: true
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist

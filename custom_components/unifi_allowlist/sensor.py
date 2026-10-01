@@ -16,7 +16,7 @@ SENSORS = (
     ("unknown", "Unknown devices seen", "mdi:help-network", None),
     ("allowed", "Allowed devices", "mdi:check-network", EntityCategory.DIAGNOSTIC),
     ("denied", "Denied devices", "mdi:close-network", EntityCategory.DIAGNOSTIC),
-    ("live", "Devices on wifi", "mdi:wifi", EntityCategory.DIAGNOSTIC),
+    ("live", "Devices online", "mdi:lan-connect", EntityCategory.DIAGNOSTIC),
 )
 
 

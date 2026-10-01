@@ -11,6 +11,7 @@ import time
 from datetime import timedelta
 from urllib.parse import urlparse
 
+from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -65,6 +66,8 @@ from .const import (
     DEVICE_CACHE_SECONDS,
     DOMAIN,
     FORGET_BATCH_SIZE,
+    LEARN_DAYS,
+    LEARN_REMIND_AFTER,
     PRUNE_BATCH_PAUSE,
 )
 from .store import DeviceStore
@@ -90,6 +93,18 @@ def _only_digits(value: str) -> str:
 
 def _norm_mac(mac: str) -> str:
     return str(mac or "").strip().lower()
+
+
+def _random_mac(mac: str) -> bool:
+    """A locally administered address - what a phone's private wifi address is.
+
+    These were invented by the device rather than assigned by a manufacturer,
+    so they say nothing about what it is, and they are worth a second look.
+    """
+    try:
+        return bool(int(_norm_mac(mac)[:2], 16) & 0x02)
+    except ValueError:
+        return False
 
 
 def _serves_wifi(dev: dict) -> bool:
@@ -181,6 +196,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._known_cache_at = 0.0
         # Filled on first poll; see _own_ips.
         self._own_ips: dict[str, str] | None = None
+        # What the panel's review screen lists: everything seen while learning,
+        # or the arrivals that tripped the "too many at once" brake.
+        self.candidates: list[dict] = []
+        self.breaker_rows: list[dict] = []
         self._spared_logged: set[str] = set()
 
         super().__init__(
@@ -385,14 +404,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
     @property
     def site_label(self) -> str:
-        """Short name for the site, without the 'Wifi Access (...)' wrapper.
+        """Short name for the site, without the 'UniFi Allow List (...)' wrapper.
 
-        Entry titles are built as 'Wifi Access (Camp X)'. Repeating that next
-        to a heading that already says Wifi Access reads badly, so pull the
-        inside out when it matches and fall back to whatever we have.
+        Entry titles are built as 'UniFi Allow List (Camp X)', or 'Wifi Access
+        (Camp X)' by older versions. Repeating that next to a heading that
+        already names the integration reads badly, so pull the inside out when
+        it matches and fall back to whatever we have.
         """
         title = (self.entry.title or "").strip()
-        match = re.fullmatch(r"Wifi Access \((.+)\)", title)
+        match = re.fullmatch(r"(?:UniFi Allow List|Wifi Access) \((.+)\)", title)
         if match:
             return match.group(1).strip()
         return title or self.site or "UniFi"
@@ -517,6 +537,11 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         return self._opt(CONF_SSIDS, []) or []
 
     @property
+    def learning(self) -> bool:
+        """First run: collecting devices, blocking nothing."""
+        return self.store.learning
+
+    @property
     def include_wired(self) -> bool:
         return bool(self._opt(CONF_INCLUDE_WIRED, DEFAULT_INCLUDE_WIRED))
 
@@ -600,7 +625,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             )
 
         self._trim_last_seen()
-        await self._auto_sync()
+        # Learning blocks nothing at all - including re-applying or adopting
+        # blocks - so the first look at a network never changes it.
+        if not self.learning:
+            await self._auto_sync()
         await self._flush_notify_backlog()
 
         if not self.wlan_names:
@@ -657,8 +685,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         ]
         in_scope = [m for m in unknown if self._in_scope(seen[m])]
 
-        if self.enforcing:
-            await self._enforce(seen, in_scope, live)
+        if self.learning:
+            self.candidates = self._learn_candidates(known, active)
+            self._breaker_tripped = False
+            self.breaker_rows = []
+            await self._learning_reminder()
+        else:
+            self.candidates = []
+            if self.enforcing:
+                await self._enforce(seen, in_scope, live)
 
         return {
             "online": len(online),
@@ -950,6 +985,13 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         max_per_run = int(self._opt(CONF_MAX_PER_RUN, DEFAULT_MAX_PER_RUN))
         if len(fresh) > max_per_run:
+            # Kept for the panel, which offers exactly these for review.
+            self.breaker_rows = [
+                self._describe(seen[m], m in live) for m in fresh
+            ]
+            if self._breaker_tripped:
+                # Already said so. Once per trip, not once per poll.
+                return
             self._breaker_tripped = True
             _LOGGER.error(
                 "%s unknown devices at once (limit %s) - blocking nothing",
@@ -957,15 +999,16 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 max_per_run,
             )
             await self._notify_plain(
-                "Wifi access: too many unknown devices",
-                f"{len(fresh)} unknown devices appeared at once. "
-                "Nothing was blocked. Check the network.",
+                f"{len(fresh)} new devices showed up at once",
+                "Nothing was blocked. This usually means a new device or a "
+                "network change. Open UniFi Allow List to review them.",
                 icon="mdi:alert",
                 color="#d9534f",
             )
             return
 
         self._breaker_tripped = False
+        self.breaker_rows = []
         block_first = bool(self._opt(CONF_BLOCK_FIRST, DEFAULT_BLOCK_FIRST))
 
         suppressed = 0
@@ -1022,6 +1065,161 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             _LOGGER.info(
                 "blocked %d device(s) silently by name rule this run", suppressed
             )
+
+    # --- learning and review --------------------------------------------------
+
+    def _learn_candidates(self, known: list[dict], active: list[dict]) -> list[dict]:
+        """Every policed client seen in the last LEARN_DAYS, not yet decided.
+
+        Reaches back days rather than just the live list, so a phone that is out
+        with its owner today still turns up for review. Invented addresses and
+        nameless devices sort first: those are the ones worth a second look.
+        """
+        cutoff = int(time.time()) - LEARN_DAYS * 86400
+        recs: dict[str, dict] = {}
+        for rec in known or []:
+            if not self._covers(rec):
+                continue
+            mac = _norm_mac(rec.get("mac"))
+            if mac and int(rec.get("last_seen") or 0) >= cutoff:
+                recs[mac] = dict(rec)
+        live: set[str] = set()
+        for rec in active or []:
+            if rec.get("is_wired") and not self.include_wired:
+                continue
+            mac = _norm_mac(rec.get("mac"))
+            if not mac:
+                continue
+            recs.setdefault(mac, {}).update(rec)
+            live.add(mac)
+
+        rows: list[dict] = []
+        for mac, rec in recs.items():
+            if self.store.is_allowed(mac) or self.store.is_denied(mac):
+                continue
+            if not self._in_scope(rec) or self._spared(mac, rec):
+                continue
+            row = self._describe(rec, mac in live)
+            row["random"] = _random_mac(mac)
+            row["suspect"] = row["random"] or not row["hostname"]
+            row["waiting"] = self.store.is_pending(mac)
+            rows.append(row)
+        rows.sort(
+            key=lambda r: (
+                not r["suspect"],
+                not r["live"],
+                (r["name"] or "zzz").casefold(),
+            )
+        )
+        return rows
+
+    @property
+    def review_rows(self) -> list[dict]:
+        """What the review screen should list right now, if anything."""
+        if self.learning:
+            return self.candidates
+        if self._breaker_tripped:
+            return [
+                r
+                for r in self.breaker_rows
+                if not self.store.is_allowed(r["mac"])
+                and not self.store.is_denied(r["mac"])
+                and not self.store.is_pending(r["mac"])
+            ]
+        return []
+
+    async def _learning_reminder(self) -> None:
+        """One nudge if setup has sat unfinished for a day."""
+        if self.store.learning_reminded:
+            return
+        if time.time() - self.store.learning_since < LEARN_REMIND_AFTER:
+            return
+        self.store.learning_reminded = True
+        await self.store.async_save()
+        await self._notify_plain(
+            "UniFi Allow List is still learning",
+            f"{len(self.candidates)} devices found so far, and nothing is being "
+            "blocked. Open UniFi Allow List to finish setup.",
+            icon="mdi:school-outline",
+        )
+
+    async def async_apply_review(
+        self, trust: list[str], block: list[str], actor: str = ""
+    ) -> dict:
+        """Trust some devices and hold the rest, in one go.
+
+        While learning this is also what finishes setup: protection starts the
+        moment the list is in place, so nothing is blocked before it exists.
+        Anything held is blocked (when block-first is on) and queued in
+        Waiting, where it can still be allowed later.
+        """
+        trust = [m for m in dict.fromkeys(_norm_mac(m) for m in trust or []) if m]
+        held = set(trust)
+        block = [
+            m
+            for m in dict.fromkeys(_norm_mac(m) for m in block or [])
+            if m and m not in held
+        ]
+        rows = {r["mac"]: r for r in (self.candidates + self.breaker_rows)}
+
+        # Anything trusted that may be blocked on the controller right now.
+        unblock = [
+            m
+            for m in trust
+            if self.store.is_pending(m)
+            or self.store.is_denied(m)
+            or (rows.get(m) or {}).get("blocked")
+        ]
+        trusted = await self.store.async_allow_many(trust)
+        for mac in unblock:
+            await self._safe_unblock(mac)
+        for mac in trust:
+            await self.store.async_close_id(mac)
+            await self.async_clear_notification(mac)
+
+        block_first = bool(self._opt(CONF_BLOCK_FIRST, DEFAULT_BLOCK_FIRST))
+        for mac in block:
+            if self.store.is_denied(mac):
+                continue
+            row = rows.get(mac) or {}
+            if block_first:
+                await self._safe_block(mac)
+            await self.store.async_add_pending(
+                mac,
+                row.get("name") or "no name",
+                row.get("ssid") or "?",
+                ap=row.get("ap", ""),
+                ip=row.get("ip", ""),
+                band=row.get("band", ""),
+            )
+
+        finished = self.learning
+        if finished:
+            await self.store.async_set_learning(False)
+            self.enforcing = True
+            self.candidates = []
+            persistent_notification.async_dismiss(self.hass, self.learning_notice_id)
+        self._breaker_tripped = False
+        self.breaker_rows = []
+
+        await self.async_record(
+            "setup" if finished else "reviewed",
+            "",
+            f"{trusted} trusted, {len(block)} held for review",
+            actor,
+        )
+        _LOGGER.warning(
+            "%s: trusted %d device(s), held %d for review",
+            "setup finished" if finished else "review applied",
+            trusted,
+            len(block),
+        )
+        await self.async_request_refresh()
+        return {"trusted": trusted, "held": len(block), "finished": finished}
+
+    @property
+    def learning_notice_id(self) -> str:
+        return f"{DOMAIN}_learning_{self.entry_id}"
 
     async def _safe_block(self, mac: str) -> None:
         try:
@@ -1438,7 +1636,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         notable = bool(restore) or bool(persistent) or bool(reblock and drifted)
         if notable:
             await self._notify_plain(
-                "Wifi access",
+                "UniFi Allow List",
                 f"Synced with UniFi: {len(adopt)} newly denied, "
                 f"{len(drifted) if reblock else 0} re-blocked, "
                 f"{len(restore)} allowed device(s) unblocked again",
@@ -1494,7 +1692,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         _LOGGER.warning("unblocked %d stranded block(s)", len(stranded))
         if stranded:
             await self._notify_plain(
-                "Wifi access",
+                "UniFi Allow List",
                 f"Unblocked {len(stranded)} device(s) with no record here",
                 icon="mdi:wifi-check",
             )
@@ -1516,7 +1714,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         _LOGGER.warning("unblocked %s client(s)", len(blocked))
         await self._notify_plain(
-            "Wifi access", f"Unblocked {len(blocked)} device(s)", icon="mdi:wifi-check"
+            "UniFi Allow List", f"Unblocked {len(blocked)} device(s)", icon="mdi:wifi-check"
         )
         await self.async_request_refresh()
         return len(blocked)
@@ -1575,7 +1773,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         if dry_run or not doomed:
             await self._notify_plain(
-                "Wifi cleanup preview",
+                "Cleanup preview",
                 f"Would forget {len(doomed)} offline devices not seen in {days}+ days. "
                 "Nothing changed.",
                 icon="mdi:broom",
@@ -1595,7 +1793,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         _LOGGER.warning("pruned %s clients, allow list -%s", len(doomed), removed)
         await self._notify_plain(
-            "Wifi cleanup done",
+            "Cleanup done",
             f"Forgot {len(doomed)} devices. Allow list shrank by {removed}.",
             icon="mdi:broom",
         )

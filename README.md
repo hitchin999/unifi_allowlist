@@ -63,13 +63,15 @@ Copy `custom_components/unifi_allowlist/` into your `config/custom_components/` 
 
 ## Setup
 
-The config flow asks for your controller URL and API key, validates them, then shows a dropdown of the sites it found, listed alphabetically. Pick one, choose where notifications should go, and you are running.
+The config flow asks for your controller URL and API key, validates them, then shows a dropdown of the sites it found, listed alphabetically. Pick one, choose which phones get prompts (your companion-app phones are ticked for you), and say whether wired devices should be watched too.
 
-**Seed the allow list before enabling enforcement.** A fresh install has an empty list, which means every device on your network is unknown. Two ways:
+**Nothing is blocked straight away.** A new site starts in **learning mode**: it collects every device seen on your network in the **last 7 days** — so a phone that is out of the house today still makes the list — and blocks nothing. A notification in Home Assistant points you to the panel, and the status pill there reads **Learning**.
 
-Turn off `switch.enforcement`, let the **On wifi now** tab fill with the devices you already trust, then press **Allow all** in the panel and turn enforcement back on.
+When you are ready, open **UniFi Allow List** in the sidebar and tap **Review and start protecting**. Every device is ticked; devices with a private (invented) address or no name are listed first, since those are the ones worth a second look. Untick anything you don't recognise and tap **Trust these and start protecting**. Ticked devices go on the allow list, unticked ones are blocked and wait for you under **Waiting**, and protection is on from that moment. If you leave it, you get one reminder after a day.
 
-Or import a list you already have:
+The enforcement switch cannot be turned on while learning, since that would block the whole network before a list exists. Sites set up by an earlier version that already have an allow list skip learning and carry on as they were.
+
+You can also import a list you already have:
 
 ```yaml
 action: unifi_allowlist.import_list
@@ -107,7 +109,7 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 | `sensor.*_unknown_devices_seen` | Unknown devices in the current window |
 | `sensor.*_allowed_devices` | Allow list size |
 | `sensor.*_denied_devices` | Deny list size |
-| `sensor.*_devices_on_wifi` | Live wireless clients (plus wired, when policed) |
+| `sensor.*_devices_online` | Live clients (wireless, plus wired when policed). Installs from before 1.14 keep the old `sensor.*_devices_on_wifi` id |
 | `switch.*_enforcement` | Master blocking toggle |
 | `button.*_unblock_everything` | Panic button — clears all blocks |
 | `button.*_resend_pending_prompts` | Re-send notifications for the queue |
@@ -122,6 +124,7 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 | `unifi_allowlist.deny` | Add a MAC to the deny list and block it |
 | `unifi_allowlist.forget` | Remove a MAC from every list |
 | `unifi_allowlist.set_name` | Give a device your own name |
+| `unifi_allowlist.apply_review` | Trust some devices and hold the rest in one go; finishes setup while learning |
 | `unifi_allowlist.allow_online_unknown` | Approve every policed unknown device currently connected |
 | `unifi_allowlist.resend_pending` | Re-notify everything still waiting |
 | `unifi_allowlist.unblock_all` | Clear every block on the controller |
@@ -144,7 +147,7 @@ Two mitigations: **scope enforcement to SSIDs where devices have static MACs** (
 - **Blocking is site-wide.** UniFi has no per-SSID block. You can trigger on one SSID, but a blocked MAC is blocked everywhere on that site.
 - **There is a gap.** An unknown device has internet until the next poll.
 - **`prune` is destructive.** Forgetting a client deletes its history and stats on the controller. Always run with `dry_run: true` first.
-- **Enforcement defaults to on** after a restart. The switch state is not persisted, so a restart never silently leaves a site unpoliced.
+- **Enforcement defaults to on** after a restart, once setup is finished. The switch state is not persisted, so a restart never silently leaves a site unpoliced. Learning mode, on the other hand, is saved and survives restarts.
 - **While Home Assistant is down**, existing blocks stay in place, but new unknown devices connect freely.
 
 ---
@@ -190,9 +193,9 @@ of this.
 **Sort & filter** beside the search box opens a sheet: sort by name either way,
 last seen, IP, access point or MAC, and filter by status, network, access point
 or band. Choices within a group are OR'd and groups are AND'd together, so
-"Camp + Guest, on wifi now" reads the way you would expect.
+"Camp + Guest, online now" reads the way you would expect.
 
-On the **On wifi now** tab, Status also splits devices into Unknown, Unknown
+On the **Online now** tab, Status also splits devices into Unknown, Unknown
 but not policed, Allowed and Blocked. Only Unknown means a decision is owed: a
 device outside the SSID scope, or one of the few that are never blocked, is
 never queued, so it is not counted as waiting.
@@ -246,16 +249,11 @@ allow and deny lists. They show **Wired** where a wifi client shows its SSID,
 and the switch and port in place of the access point, so the network filter
 picks them out on their own.
 
-Seed first, exactly as on a fresh install. Every server, printer, TV and
-console you own is unknown the moment this is switched on, so:
-
-1. Turn off `switch.enforcement`
-2. Turn on **Also police wired clients**
-3. Wait for the wired devices to appear on the **On wifi now** tab, then press **Allow all**
-4. Turn enforcement back on
-
-Skip that and the "too many at once" guard trips and blocks nothing at all,
-wifi included, until it is sorted out.
+Easiest is to pick it during setup, so wired devices are part of the
+learning-mode review. Switched on later, every server, printer, TV and console
+you own is unknown at once, so the "too many at once" brake trips and blocks
+nothing. The panel then shows **Review them**: tick the ones you trust and
+protection carries on.
 
 The SSID list narrows wifi only. While wired clients are on they are all
 policed, whatever that list says.
@@ -309,7 +307,9 @@ backup is the usual answer.
 
 **Too many at once.** Separately, if more unknown devices appear in a single
 poll than **Maximum blocks per run** (10 by default), nothing is blocked and you
-get a warning. That covers the sudden case, at any size.
+get one warning. That covers the sudden case, at any size. The panel lists the
+devices that tripped it under **Review them**, so sorting it out is a matter of
+ticking the ones you trust.
 
 **Minimum allow list size** is a third, optional hard floor and is **off** by
 default. A fixed number fits a large site far better than a small one, and the
