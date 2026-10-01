@@ -568,6 +568,7 @@ const STYLES = `
     background: var(--ua-card); border-color: var(--ua-line);
     color: var(--ua-muted); font-weight: 500;
   }
+  .bulk.quiet button { color: var(--ua-blue); border-color: var(--ua-line); }
   .bulk button.confirm { background: var(--ua-warn); color: #fff; border-color: transparent; }
   .bulk button:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 2px; }
 
@@ -2129,6 +2130,14 @@ class UnifiAllowlistPanel extends HTMLElement {
   }
 
   _onBulk(which) {
+    if (which === "unwatched") {
+      const only = (this._filters.state || []).join() === "unpoliced";
+      this._filters.state = only ? [] : ["unpoliced"];
+      this._resetPaging();
+      this._savePrefs();
+      this._renderList();
+      return;
+    }
     if (which === "go") {
       this._confirmBulk = true;
       this._pushOverlayHist("confirm");
@@ -3462,6 +3471,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     if (!rows.length) {
       list.innerHTML =
+        this._bulkHtml(rows) +
         `<div class="empty"><ha-icon icon="${this._emptyIcon()}"></ha-icon>` +
         `<span>${this._esc(this._emptyText())}</span></div>`;
       return;
@@ -3562,12 +3572,23 @@ class UnifiAllowlistPanel extends HTMLElement {
       n = rows.filter((r) => r.live && r.state === "unknown").length;
       if (!n) {
         const quiet = rows.filter((r) => r.live && r.state === "unpoliced").length;
-        if (!quiet) return "";
+        // Tapping narrows the list to just these, and back again. Kept on
+        // screen while narrowed, even once they have gone, so the way back
+        // never disappears.
+        const only = (this._filters.state || []).join() === "unpoliced";
+        if (!quiet && !only) return "";
         return `<div class="bulk quiet">
             <ha-icon icon="mdi:shield-off-outline"></ha-icon>
-            <span class="txt">${quiet} unknown device${
-              quiet === 1 ? " is" : "s are"
-            } not watched, so nothing is waiting on you.</span></div>`;
+            <span class="txt">${
+              quiet
+                ? `${quiet} unknown device${
+                    quiet === 1 ? " is" : "s are"
+                  } not watched, so nothing is waiting on you.`
+                : "No unwatched devices are online now."
+            }</span>
+            <span class="btns"><button data-bulk="unwatched">${
+              only ? "Show all devices" : quiet === 1 ? "Show it" : "Show them"
+            }</button></span></div>`;
       }
       text = `${n} device${n === 1 ? " is" : "s are"} waiting on a decision.`;
       confirmText =
