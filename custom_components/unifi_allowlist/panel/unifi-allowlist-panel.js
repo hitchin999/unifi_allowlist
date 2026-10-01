@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.14.0";
+const PANEL_VERSION = "1.13.0";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -735,6 +735,13 @@ const STYLES = `
     padding: 12px 14px; border-top: 1px solid var(--ua-line); font-size: 15px;
   }
   .cfgrow:first-child { border-top: 0; }
+  .advbtn {
+    display: flex; align-items: center; gap: 6px; margin: 0 4px 6px;
+    appearance: none; border: 0; background: none; padding: 0; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ua-dim);
+  }
+  .advbtn ha-icon { --mdc-icon-size: 18px; }
   .cfgrow .txt { flex: 1 1 auto; min-width: 0; }
   .cfgrow .txt small {
     display: block; margin-top: 2px; font-size: 12px; color: var(--ua-dim);
@@ -1890,6 +1897,11 @@ class UnifiAllowlistPanel extends HTMLElement {
         this._removeName(Number(rm.dataset.idx));
         return;
       }
+      if (ev.target.closest && ev.target.closest("#advbtn")) {
+        this._cfgAdv = !this._cfgAdv;
+        this._renderCfg(true);
+        return;
+      }
       if (ev.target.closest && ev.target.closest("#preadd")) {
         this._preApprove();
         return;
@@ -2887,24 +2899,26 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
   }
 
+  /* The fifth field marks the technical ones, kept under Advanced so the
+     everyday sheet is three plain switches. */
   _cfgDefs() {
     return [
-      ["block_first", "toggle", "Block on sight, then ask",
-       "Off means an unknown device is reported but left connected."],
-      ["scan_interval", "number", "Check every",
-       "Seconds between reads of the connected device list. Lower is quicker to block; below 15 a busy run can overlap the next check."],
-      ["max_per_run", "number", "Stop if more than this arrive at once",
-       "A safety brake. If more unknown devices appear in one check, nothing is blocked and you get a warning."],
-      ["notify_gap", "number", "Pause between alerts",
-       "Seconds. Lower it if you shorten the check interval."],
+      ["block_first", "toggle", "Block new devices until you answer",
+       "Off means a new device is reported but left connected."],
+      ["include_wired", "toggle", "Also watch wired devices",
+       "Devices plugged into a cable, such as TVs, printers and servers, get the same approve-or-block treatment."],
+      ["deny_unnamed", "toggle", "Always block devices with no name",
+       "Catches cameras and other smart gear too, so check Waiting before turning it on."],
+      ["scan_interval", "number", "Check every (seconds)",
+       "How often the connected-device list is read. Lower is quicker to block; below 15 a busy run can overlap the next check.", true],
+      ["max_per_run", "number", "Safety brake: more than this at once",
+       "If more new devices than this appear in one check, nothing is blocked and you are asked to review them instead.", true],
+      ["notify_gap", "number", "Pause between alerts (seconds)",
+       "Stops phones dropping alerts that arrive back to back. Lower it if you shorten the check interval.", true],
       ["adopt_blocks", "toggle", "Adopt blocks made in UniFi",
-       "Move devices blocked in the UniFi UI into Blocked here."],
-      ["forget_in_unifi", "toggle", "Remove the client from UniFi when forgetting",
-       "Clients with an alias or a fixed IP are only unblocked."],
-      ["deny_unnamed", "toggle", "Always block devices that report no name",
-       "Catches cameras and IoT gear too. Check the waiting list first."],
-      ["include_wired", "toggle", "Also police wired clients",
-       "Devices plugged into a cable get the same approve-or-block treatment. If several turn up at once, tap Review them."],
+       "Devices you block by hand in UniFi show up under Blocked here.", true],
+      ["forget_in_unifi", "toggle", "Forget also removes the device from UniFi",
+       "Devices with an alias or a fixed IP set in UniFi are only unblocked.", true],
     ];
   }
 
@@ -2918,8 +2932,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       return;
     }
     const o = (this._data && this._data.options) || {};
-    const rows = this._cfgDefs()
-      .map(([key, kind, label, hint]) => {
+    const row = ([key, kind, label, hint]) => {
         const control =
           kind === "toggle"
             ? `<button class="sw" role="switch" data-key="${key}"
@@ -2931,8 +2944,10 @@ class UnifiAllowlistPanel extends HTMLElement {
                  aria-label="${this._esc(label)}">`;
         return `<div class="cfgrow"><span class="txt">${this._esc(label)}
                   <small>${this._esc(hint)}</small></span>${control}</div>`;
-      })
-      .join("");
+    };
+    const defs = this._cfgDefs();
+    const rows = defs.filter((d) => !d[4]).map(row).join("");
+    const adv = defs.filter((d) => d[4]).map(row).join("");
     const names = (o.deny_names || []).slice();
     const nameHtml = names.length
       ? names
@@ -2981,6 +2996,12 @@ class UnifiAllowlistPanel extends HTMLElement {
             changed, so this is noise control rather than security.</small></span>
           </div>
         </div></div></div>` +
+      `<div class="sheet-sec"><button class="advbtn" id="advbtn"
+          aria-expanded="${this._cfgAdv ? "true" : "false"}">
+          <ha-icon icon="mdi:chevron-${this._cfgAdv ? "up" : "down"}"></ha-icon>
+          Advanced</button>` +
+      (this._cfgAdv ? `<div class="sheet-group">${adv}</div>` : "") +
+      `</div>` +
       `<div class="sheet-sec"><h3>Elsewhere</h3><div class="sheet-group">` +
       `<div class="cfgrow"><span class="txt">Controller, site, networks and alerts
         <small>Settings &gt; Devices &amp; services &gt; UniFi Allow List &gt; Configure.
