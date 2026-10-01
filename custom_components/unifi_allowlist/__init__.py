@@ -700,6 +700,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "vendor": vendors.get(mac, ""),
                         "known": mac in on_controller,
                         "review": False,
+                        # "unifi" when adopted from a block made in the UniFi UI.
+                        "source": (info or {}).get("source", ""),
                     }
                     for mac, info in store.denied.items()
                 ]

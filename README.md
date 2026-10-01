@@ -63,7 +63,7 @@ Copy `custom_components/unifi_allowlist/` into your `config/custom_components/` 
 
 ## Setup
 
-The config flow asks for your controller URL and API key, validates them, then shows a dropdown of the sites it found, listed alphabetically. Pick one, choose which phones get prompts (your companion-app phones are ticked for you), and say whether wired devices should be watched too.
+The config flow asks for your controller URL and API key, validates them, then shows a dropdown of the sites it found, listed alphabetically. Pick one and choose which phones get prompts (your companion-app phones are ticked for you). The last step, **What to watch**, lists that site's wifi networks — tick the ones to watch, or leave them all unticked to watch every network — and asks whether wired devices should be watched too.
 
 **Nothing is blocked straight away.** A new site starts in **learning mode**: it collects every device seen on your network in the **last 7 days** — so a phone that is out of the house today still makes the list — and blocks nothing. A notification in Home Assistant points you to the panel, and the status pill there reads **Learning**.
 
@@ -327,7 +327,7 @@ Blocks made by hand in the UniFi UI are invisible to this integration by
 default, and a denial removed there is never re-applied. `sync_from_unifi`
 reconciles both:
 
-- **blocked there, not by us** -> moved to Denied. Devices this integration
+- **blocked there, not by us** -> moved to Denied, tagged **blocked in UniFi** in the panel. Devices this integration
   blocked are already in the waiting or denied lists and are skipped, so a
   pending approval is never quietly reversed.
 - **denied here, not blocked there** -> blocked again.

@@ -2838,7 +2838,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     const states = [
       ["unknown", "Unknown"],
-      ["unpoliced", "Unknown, not policed"],
+      ["unpoliced", "Unknown, not watched"],
       ["allowed", "Allowed"],
       ["denied", "Blocked"],
     ].filter(([v]) => all.some((r) => r.state === v));
@@ -3300,7 +3300,7 @@ class UnifiAllowlistPanel extends HTMLElement {
             ? { v: `never blocked: ${r.spared}`, cls: "off", icon: "mdi:shield-lock-outline" }
             : r.in_scope
             ? null
-            : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
+            : { v: "not watched", cls: "off", icon: "mdi:shield-off-outline" },
           r.live ? null : UnifiAllowlistPanel._lastSeenChip(r.last_seen),
           r.vendor ? { v: r.vendor, cls: "off", icon: "mdi:factory" } : null,
         ],
@@ -3366,6 +3366,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       status: liveMacs.has(e.mac) ? state : "off",
       // the verdict is a fact about the list, not about being connected
       verdict: state,
+      source: e.source || "",
       chips: [
         liveMacs.has(e.mac)
           ? { v: "online now", cls: "net", icon: "mdi:lan-connect" }
@@ -3377,6 +3378,10 @@ class UnifiAllowlistPanel extends HTMLElement {
             // is indistinguishable from a device that is merely switched off.
             { v: "never seen here", cls: "off", icon: "mdi:help-circle-outline" }
           : UnifiAllowlistPanel._lastSeenChip(e.last_seen),
+        // Adopted from a block somebody made in the UniFi UI, not decided here.
+        e.source === "unifi"
+          ? { v: "blocked in UniFi", cls: "off", icon: "mdi:import" }
+          : null,
         e.vendor ? { v: e.vendor, cls: "off", icon: "mdi:factory" } : null,
       ],
       fields: [
@@ -3562,7 +3567,7 @@ class UnifiAllowlistPanel extends HTMLElement {
             <ha-icon icon="mdi:shield-off-outline"></ha-icon>
             <span class="txt">${quiet} unknown device${
               quiet === 1 ? " is" : "s are"
-            } not policed, so nothing is waiting on you.</span></div>`;
+            } not watched, so nothing is waiting on you.</span></div>`;
       }
       text = `${n} device${n === 1 ? " is" : "s are"} waiting on a decision.`;
       confirmText =

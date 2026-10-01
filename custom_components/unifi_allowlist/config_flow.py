@@ -198,14 +198,12 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 (s.get("desc") or site for s in self._sites if s.get("name") == site),
                 site,
             )
-            data = {**self._creds, CONF_SITE: site}
-            options = {
+            self._picked = {
+                "site": site,
+                "label": label,
                 CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY)),
-                CONF_INCLUDE_WIRED: bool(user_input.get(CONF_INCLUDE_WIRED, False)),
             }
-            return self.async_create_entry(
-                title=f"{ENTRY_TITLE} ({label})", data=data, options=options
-            )
+            return await self.async_step_networks()
 
         all_sites = [s for s in self._sites if s.get("name")]
         matches = _match_sites(all_sites, search)
@@ -246,9 +244,6 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         multiple=True,
                     )
                 ),
-                vol.Optional(
-                    CONF_INCLUDE_WIRED, default=DEFAULT_INCLUDE_WIRED
-                ): BooleanSelector(),
             }
         )
         return self.async_show_form(
@@ -265,6 +260,65 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         return UnifiAllowlistOptionsFlow()
+
+
+    async def async_step_networks(self, user_input: dict | None = None):
+        """What to watch: which wifi networks, and whether wired devices too.
+
+        Asked after the site, since the networks belong to it.
+        """
+        picked = self._picked
+        if user_input is not None:
+            data = {**self._creds, CONF_SITE: picked["site"]}
+            options = {
+                CONF_NOTIFY: picked[CONF_NOTIFY],
+                CONF_SSIDS: list(user_input.get(CONF_SSIDS) or []),
+                CONF_INCLUDE_WIRED: bool(user_input.get(CONF_INCLUDE_WIRED, False)),
+            }
+            return self.async_create_entry(
+                title=f"{ENTRY_TITLE} ({picked['label']})", data=data, options=options
+            )
+
+        networks: list[str] = []
+        session = async_get_clientsession(
+            self.hass, verify_ssl=self._creds.get(CONF_VERIFY_SSL, False)
+        )
+        client = UnifiClient(
+            session,
+            self._creds[CONF_HOST],
+            picked["site"],
+            self._creds[CONF_API_KEY],
+            self._creds.get(CONF_VERIFY_SSL, False),
+        )
+        try:
+            networks = sorted(
+                {str(w.get("name")) for w in await client.wlans() if w.get("name")},
+                key=str.casefold,
+            )
+        except UnifiError as err:
+            # Not fatal: leaving the list empty watches every network.
+            _LOGGER.debug("could not list wifi networks: %s", err)
+
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_SSIDS, default=[]): SelectSelector(
+                    SelectSelectorConfig(
+                        options=networks,
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST,
+                        custom_value=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_INCLUDE_WIRED, default=DEFAULT_INCLUDE_WIRED
+                ): BooleanSelector(),
+            }
+        )
+        return self.async_show_form(
+            step_id="networks",
+            data_schema=schema,
+            description_placeholders={"site": picked["label"]},
+        )
 
 
 class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):

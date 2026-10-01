@@ -108,8 +108,8 @@ prune:
   name: Prune stale devices
   description: >-
     Forget offline wireless clients on the controller and drop them from the
-    allow list. Wired devices are skipped unless wired clients are being
-    policed; denied and pending devices are always skipped.
+    allow list. Wired devices are skipped unless wired devices are being
+    watched; denied and pending devices are always skipped.
   fields:
     days:
       name: Not seen for (days)
@@ -226,7 +226,7 @@ allow_online_unknown:
     Approve every unknown device currently connected. Intended for setting up a
     new site: turn enforcement off, let the list fill with the devices you
     already trust, run this once, then turn enforcement back on. Devices that
-    are not policed - outside the SSID scope, or never blocked, such as this
+    are not watched - outside the chosen wifi networks, or never blocked, such as this
     Home Assistant host - are left alone.
   fields:
     site:

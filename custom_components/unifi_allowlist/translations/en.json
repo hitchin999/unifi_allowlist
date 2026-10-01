@@ -12,14 +12,22 @@
       },
       "site": {
         "title": "Choose the site",
-        "description": "Pick which site to watch, and which phones get Allow / Block prompts. Nothing is blocked straight away: it first learns the devices already on your network, and you review that list in the UniFi Allow List panel before protection starts. Showing {shown} of {total} sites. With a lot of sites, type part of a name in Search and submit to narrow the list, then choose from it.",
+        "description": "Pick which site to watch, and which phones get Allow / Block prompts. Showing {shown} of {total} sites. With a lot of sites, type part of a name in Search and submit to narrow the list, then choose from it.",
         "data": {
           "site": "Site",
           "notify_service": "Phones to notify",
-          "site_search": "Search",
+          "site_search": "Search"
+        }
+      },
+      "networks": {
+        "title": "What to watch",
+        "description": "UniFi Allow List watches devices that join your wifi at {site}, and can watch wired devices too. Nothing is blocked straight away: it first learns the devices already on your network, and you review that list in the UniFi Allow List panel before protection starts.",
+        "data": {
+          "enforced_ssids": "Wifi networks to watch",
           "include_wired": "Also watch wired devices"
         },
         "data_description": {
+          "enforced_ssids": "Tick the networks to watch. Leave them all unticked to watch every network - or tick only, say, the IoT network and leave the guest network alone.",
           "include_wired": "Off watches wifi only. On also covers devices plugged into a cable, such as TVs, printers and servers."
         }
       }
@@ -39,29 +47,29 @@
       "init": {
         "title": "UniFi Allow List settings",
         "data": {
-          "notify_service": "Notification targets",
-          "enforced_ssids": "Only police these SSIDs (leave empty for all)",
-          "include_wired": "Also police wired clients",
-          "block_first": "Block on sight, then ask",
+          "notify_service": "Phones to notify",
+          "enforced_ssids": "Wifi networks to watch (leave empty for all)",
+          "include_wired": "Also watch wired devices",
+          "block_first": "Block new devices until you answer",
           "scan_interval": "Check every",
           "lookback": "Also catch devices seen within",
-          "max_per_run": "Stop and alert if more than this appear at once",
+          "max_per_run": "Safety brake: more than this at once",
           "channel": "Android notification channel",
           "group": "Android notification group",
           "min_list_guard": "Minimum allow list size before blocking",
-          "notify_gap": "Pause between notifications",
+          "notify_gap": "Pause between alerts",
           "adopt_blocks": "Adopt blocks made in UniFi",
           "deny_names": "Always block these device names",
-          "deny_unnamed": "Always block devices that report no name",
-          "forget_in_unifi": "Also remove the client from UniFi when forgetting",
+          "deny_unnamed": "Always block devices with no name",
+          "forget_in_unifi": "Forget also removes the device from UniFi",
           "sms_numbers": "Text alerts to these numbers",
           "sms_line": "Send SMS from this line (optional)",
           "sms_pin": "PIN required on SMS replies (optional)",
           "sms_digest": "Combine bursts into one text"
         },
         "data_description": {
-          "include_wired": "Treat devices plugged into a cable exactly like wifi devices: block on sight, ask, allow or deny. The SSID list above only narrows wifi; wired clients are all policed while this is on. Turning this on later trips the 'too many at once' brake if you have several wired devices; tap Review them in the panel and tick the ones you trust. This Home Assistant host, the controller and UniFi gear itself are never blocked.",
-          "adopt_blocks": "Each poll, move devices blocked in the UniFi UI into Denied, and re-apply blocks that were removed there. Off by default.",
+          "include_wired": "Devices plugged into a cable, such as TVs, printers and servers, get the same approve-or-block treatment. The wifi network list above only narrows wifi; wired devices are all watched while this is on. Turning this on later trips the safety brake if several wired devices appear at once; tap Review them in the panel and tick the ones you trust. This Home Assistant host, the controller and UniFi gear itself are never blocked.",
+          "adopt_blocks": "Devices you block by hand in UniFi show up under Blocked here, tagged 'blocked in UniFi', and a block removed in UniFi is put back. On by default.",
           "deny_names": "One entry per name, case insensitive, * and ? wildcards allowed. A plain word also matches anywhere in the name. Matching devices are blocked silently with no notification and no queue entry. Where the panel shows a name with the MAC appended, such as 'Tesla a2:fb', either form works - the plain name catches every client using it, the suffixed one catches only that device. Names come from the device and can be changed, so treat this as noise control rather than security.",
           "deny_unnamed": "Devices with no hostname at all. This catches a lot of legitimate hardware such as cameras and IoT gear, so check the waiting list before turning it on.",
           "forget_in_unifi": "Deletes the client record on the controller, the same as Forget in the UniFi UI - alias, fixed IP and history included, with no undo. Clients that have a name or a fixed IP set in UniFi are only unblocked instead, so nothing you configured there is destroyed.",
@@ -70,7 +78,9 @@
           "sms_line": "Leave blank to use the first configured Telebroad line.",
           "sms_pin": "Caller ID can be faked, so anyone who learns the line number and the id format could reply. With a PIN set, replies must read '475 allow 4321'. Blank means no PIN.",
           "sms_digest": "One text listing several devices instead of one text each. Useful on a busy night; off means every device gets its own message.",
-          "scan_interval": "How often the connected-device list is read. This is the small, cheap call, so lowering it shortens the window an unknown device has before it is blocked without much extra load. The full client list refreshes once a minute regardless. Going below about 15s risks a busy run overlapping the next poll; lower the pause between alerts too if you do."
+          "scan_interval": "How often the connected-device list is read. This is the small, cheap call, so lowering it shortens the window an unknown device has before it is blocked without much extra load. The full client list refreshes once a minute regardless. Going below about 15s risks a busy run overlapping the next poll; lower the pause between alerts too if you do.",
+          "max_per_run": "If more new devices than this appear in one check, nothing is blocked and you are asked to review them in the panel instead.",
+          "block_first": "Off means a new device is reported but left connected."
         }
       }
     }
