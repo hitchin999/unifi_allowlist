@@ -6,7 +6,7 @@
 
 # UniFi Allow List for Home Assistant
 
-A **MAC allow list for UniFi wireless networks**, with an approve-or-deny workflow.
+A **MAC allow list for UniFi networks** — wifi, and optionally wired — with an approve-or-deny workflow.
 
 An unknown device joins your wifi. It gets blocked on the controller, and you get a notification with **Allow** and **Keep blocked** buttons. Tap one. That's the whole idea.
 
@@ -107,7 +107,7 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 | `sensor.*_unknown_devices_seen` | Unknown devices in the current window |
 | `sensor.*_allowed_devices` | Allow list size |
 | `sensor.*_denied_devices` | Deny list size |
-| `sensor.*_devices_on_wifi` | Live wireless clients |
+| `sensor.*_devices_on_wifi` | Live wireless clients (plus wired, when policed) |
 | `switch.*_enforcement` | Master blocking toggle |
 | `button.*_unblock_everything` | Panic button — clears all blocks |
 | `button.*_resend_pending_prompts` | Re-send notifications for the queue |
