@@ -54,6 +54,10 @@ class DeviceStore:
         self.denied: dict[str, dict] = {}
         self.pending: dict[str, dict] = {}
         self.labels: dict[str, str] = {}
+        # First-run mode: watch and collect, block nothing. See LEARN_DAYS.
+        self.learning = True
+        self.learning_since = 0
+        self.learning_reminded = False
         self._loaded = False
 
     async def async_load(self) -> None:
@@ -68,6 +72,20 @@ class DeviceStore:
             str(k): v for k, v in (data.get("ids") or {}).items() if isinstance(v, dict)
         }
         self._expire_ids()
+
+        if "learning" in data:
+            self.learning = bool(data["learning"])
+        else:
+            # Saved by a version without learning mode. A site that already has
+            # an allow list is set up and carries on as it was; one with an
+            # empty list never got going, so it gets the first-run review.
+            self.learning = not self.allowed
+        self.learning_since = int(data.get("learning_since") or 0) or int(time.time())
+        self.learning_reminded = bool(data.get("learning_reminded"))
+        if self.learning and not data.get("learning_since"):
+            # Pin the start, so the reminder counts from first install rather
+            # than from the latest restart.
+            await self.async_save()
 
         audit = await self._audit_store.async_load() or {}
         self.audit = list(audit.get("entries") or [])[-AUDIT_MAX:]
@@ -89,8 +107,18 @@ class DeviceStore:
                 "pending": self.pending,
                 "labels": self.labels,
                 "ids": self.ids,
+                "learning": self.learning,
+                "learning_since": self.learning_since,
+                "learning_reminded": self.learning_reminded,
             }
         )
+
+    async def async_set_learning(self, on: bool) -> None:
+        self.learning = bool(on)
+        if on:
+            self.learning_since = int(time.time())
+            self.learning_reminded = False
+        await self.async_save()
 
     # --- SMS ids ------------------------------------------------------------
 

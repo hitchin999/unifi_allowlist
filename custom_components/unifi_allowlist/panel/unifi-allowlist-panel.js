@@ -1,5 +1,5 @@
 /**
- * WiFi Access panel for Home Assistant.
+ * UniFi Allow List panel for Home Assistant.
  *
  * UniFi-flavoured blue/slate design: glass header, summary tiles that stay put,
  * pill tabs with icons on desktop and a floating tab bar on phones. The tab bar
@@ -38,7 +38,7 @@ const TAB_DEFS = [
     label: "Waiting on you",
     short: "Waiting",
   },
-  { id: "online", icon: "mdi:wifi", label: "On wifi now", short: "On wifi" },
+  { id: "online", icon: "mdi:lan-connect", label: "Online now", short: "Online" },
   {
     id: "allowed",
     icon: "mdi:shield-check-outline",
@@ -262,6 +262,10 @@ const STYLES = `
     background: var(--ua-warn-bg); color: var(--ua-warn);
     border-color: rgba(180,83,9,.26);
   }
+  .status.learn {
+    background: var(--ua-blue-soft); color: var(--ua-blue);
+    border-color: rgba(37,99,235,.26);
+  }
   .beacon {
     position: relative;
     flex: 0 0 auto;
@@ -429,6 +433,19 @@ const STYLES = `
   .banner ha-icon { flex: 0 0 auto; --mdc-icon-size: 19px; margin-top: 1px; }
   .banner.err  { background: var(--ua-bad-bg);  color: var(--ua-bad);  border-color: rgba(220,38,38,.28); }
   .banner.warn { background: var(--ua-warn-bg); color: var(--ua-warn); border-color: rgba(180,83,9,.28); }
+  .banner.learn { background: var(--ua-blue-soft); color: var(--ua-text); border-color: rgba(37,99,235,.28); }
+  .banner.learn > ha-icon { color: var(--ua-blue); }
+  .banner .b-body { flex: 1 1 auto; min-width: 0; }
+  .banner .b-body b { display: block; font-size: 15px; margin-bottom: 2px; }
+  .banner .b-body span { font-weight: 500; }
+  .banner .b-go {
+    display: block; margin-top: 10px; width: 100%;
+    appearance: none; font: inherit; font-size: 14px; font-weight: 700;
+    padding: 10px 14px; border-radius: 11px; cursor: pointer;
+    border: 0; background: var(--ua-blue); color: #fff;
+  }
+  .banner.warn .b-go { background: var(--ua-warn); }
+  .banner .b-go:focus-visible { outline: 2px solid var(--ua-text); outline-offset: 2px; }
 
   /* ---------- tabs ---------- */
 
@@ -547,6 +564,11 @@ const STYLES = `
     background: var(--ua-card); color: var(--ua-warn);
   }
   .bulk button:hover { background: var(--ua-bg); }
+  .bulk.quiet {
+    background: var(--ua-card); border-color: var(--ua-line);
+    color: var(--ua-muted); font-weight: 500;
+  }
+  .bulk.quiet button { color: var(--ua-blue); border-color: var(--ua-line); }
   .bulk button.confirm { background: var(--ua-warn); color: #fff; border-color: transparent; }
   .bulk button:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 2px; }
 
@@ -693,11 +715,34 @@ const STYLES = `
   .opt[aria-checked="true"] .box ha-icon { color: #fff; --mdc-icon-size: 16px; width: 16px; height: 16px; }
   .opt[aria-checked="false"] .box ha-icon { display: none; }
   .opt.radio .box { border-radius: 50%; }
+  .rev-intro { margin: 6px 4px 12px; font-size: 13.5px; color: var(--ua-muted); line-height: 1.45; }
+  .rev-all { display: flex; gap: 14px; margin: 0 4px 8px; }
+  .rev-all button {
+    appearance: none; border: 0; background: none; padding: 0; cursor: pointer;
+    font: inherit; font-size: 13px; font-weight: 700; color: var(--ua-blue);
+  }
+  .opt.rev { align-items: flex-start; }
+  .opt.rev .box { margin-top: 2px; }
+  .opt.rev .meta {
+    display: block; margin-top: 3px; white-space: normal;
+    font-size: 12px; color: var(--ua-muted);
+  }
+  .opt.rev .flag { color: var(--ua-warn); font-weight: 700; }
+  .rev-sum { flex: 1 1 100%; font-size: 12.5px; color: var(--ua-muted); text-align: center; }
+  #rev .sheet-ft { flex-wrap: wrap; }
+  @media (min-width: 720px) { #rev { width: min(520px, 46vw); } }
   .cfgrow {
     display: flex; align-items: center; gap: 12px;
     padding: 12px 14px; border-top: 1px solid var(--ua-line); font-size: 15px;
   }
   .cfgrow:first-child { border-top: 0; }
+  .advbtn {
+    display: flex; align-items: center; gap: 6px; margin: 0 4px 6px;
+    appearance: none; border: 0; background: none; padding: 0; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ua-dim);
+  }
+  .advbtn ha-icon { --mdc-icon-size: 18px; }
   .cfgrow .txt { flex: 1 1 auto; min-width: 0; }
   .cfgrow .txt small {
     display: block; margin-top: 2px; font-size: 12px; color: var(--ua-dim);
@@ -1281,14 +1326,14 @@ class UnifiAllowlistPanel extends HTMLElement {
   _loadPrefs() {
     if (this._sort !== undefined) return;
     this._sort = "name";
-    this._filters = { conn: [], ssid: [], ap: [], band: [], vendor: [] };
+    this._filters = { conn: [], state: [], ssid: [], ap: [], band: [], vendor: [] };
     try {
       const raw = window.localStorage.getItem("ual_view");
       if (raw) {
         const saved = JSON.parse(raw) || {};
         if (typeof saved.sort === "string") this._sort = saved.sort;
         if (saved.filters && typeof saved.filters === "object") {
-          for (const k of ["conn", "ssid", "ap", "band", "vendor"]) {
+          for (const k of ["conn", "state", "ssid", "ap", "band", "vendor"]) {
             if (Array.isArray(saved.filters[k])) this._filters[k] = saved.filters[k];
           }
         }
@@ -1701,7 +1746,7 @@ class UnifiAllowlistPanel extends HTMLElement {
           <div class="brand">
             <div class="brand-ico"><svg class="mark" viewBox="0 0 256 256" aria-hidden="true"><mask id="ualcut"><rect width="256" height="256" fill="white"/><g fill="black" stroke="black" stroke-width="7" stroke-linejoin="round"><path d="M 115 166 V 152 a 13 13 0 0 1 26 0 V 166" fill="none" stroke-linecap="round"/><rect x="102" y="166" width="52" height="40" rx="10"/></g></mask><g mask="url(#ualcut)" fill="none" stroke="currentColor" stroke-width="15.0" stroke-linecap="round"><path d="M 54.5 96.3 A 96.0 96.0 0 0 1 201.5 96.3"/><path d="M 75.9 114.3 A 68.0 68.0 0 0 1 180.1 114.3"/><path d="M 97.4 132.3 A 40.0 40.0 0 0 1 158.6 132.3"/></g><path d="M 115 166 V 152 a 13 13 0 0 1 26 0 V 166" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/><g fill="currentColor"><rect x="102" y="166" width="52" height="40" rx="10"/></g></svg></div>
             <div class="brand-txt">
-              <h1 id="title">WiFi Access</h1>
+              <h1 id="title">UniFi Allow List</h1>
               <div class="sub" id="sub"></div>
             </div>
           </div>
@@ -1802,6 +1847,23 @@ class UnifiAllowlistPanel extends HTMLElement {
           <div class="sheet-body" id="hist-body"></div>
         </aside>
 
+        <div class="sheet-bd" id="rev-bd"></div>
+        <aside class="sheet" id="rev" role="dialog" aria-modal="true"
+               aria-label="Review devices" hidden>
+          <div class="sheet-hd">
+            <ha-icon icon="mdi:shield-check-outline"></ha-icon>
+            <h2 id="rev-title">Review devices</h2>
+            <button class="icon-btn" id="rev-x" aria-label="Close">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="sheet-body" id="rev-body"></div>
+          <div class="sheet-ft">
+            <span class="rev-sum" id="rev-sum"></span>
+            <button class="primary" id="rev-go">Trust</button>
+          </div>
+        </aside>
+
         <div class="row-menu" id="row-menu"></div>
         <div class="toast" id="toast"></div>
       </div>
@@ -1834,6 +1896,11 @@ class UnifiAllowlistPanel extends HTMLElement {
       const rm = ev.target.closest && ev.target.closest(".namechip button");
       if (rm) {
         this._removeName(Number(rm.dataset.idx));
+        return;
+      }
+      if (ev.target.closest && ev.target.closest("#advbtn")) {
+        this._cfgAdv = !this._cfgAdv;
+        this._renderCfg(true);
         return;
       }
       if (ev.target.closest && ev.target.closest("#preadd")) {
@@ -1882,7 +1949,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     root.getElementById("sheet-x").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-done").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-clear").addEventListener("click", () => {
-      this._filters = { conn: [], ssid: [], ap: [], band: [], vendor: [] };
+      this._filters = { conn: [], state: [], ssid: [], ap: [], band: [], vendor: [] };
       this._sort = "name";
       this._resetPaging();
       this._savePrefs();
@@ -1902,8 +1969,33 @@ class UnifiAllowlistPanel extends HTMLElement {
       this._renderSheet();
       this._renderList();
     });
+    root.getElementById("banner").addEventListener("click", (ev) => {
+      if (ev.target.closest && ev.target.closest(".b-go")) this._openRev(true);
+    });
+    root.getElementById("rev-bd").addEventListener("click", () => this._openRev(false));
+    root.getElementById("rev-x").addEventListener("click", () => this._openRev(false));
+    root.getElementById("rev-go").addEventListener("click", () => this._applyRev());
+    root.getElementById("rev").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const all = ev.target.closest && ev.target.closest("[data-revall]");
+      if (all) {
+        const rows = this._revRows();
+        this._revOff = new Set(
+          all.dataset.revall === "none" ? rows.map((r) => r.mac) : []
+        );
+        this._renderRev();
+        return;
+      }
+      const opt = ev.target.closest && ev.target.closest(".opt.rev");
+      if (!opt) return;
+      const mac = opt.dataset.mac;
+      if (this._revOff.has(mac)) this._revOff.delete(mac);
+      else this._revOff.add(mac);
+      this._renderRev();
+    });
     window.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
+      if (this._revOpen) this._openRev(false);
       if (this._sheetOpen) this._openSheet(false);
       if (this._histOpen) this._openHist(false);
       if (this._cfgOpen) this._openCfg(false);
@@ -2038,6 +2130,14 @@ class UnifiAllowlistPanel extends HTMLElement {
   }
 
   _onBulk(which) {
+    if (which === "unwatched") {
+      const only = (this._filters.state || []).join() === "unpoliced";
+      this._filters.state = only ? [] : ["unpoliced"];
+      this._resetPaging();
+      this._savePrefs();
+      this._renderList();
+      return;
+    }
     if (which === "go") {
       this._confirmBulk = true;
       this._pushOverlayHist("confirm");
@@ -2254,11 +2354,26 @@ class UnifiAllowlistPanel extends HTMLElement {
         `${d.guard_min}. Approve more devices, or lower the minimum in the ` +
         `integration options.</span></div>`;
     }
-    if (d && d.breaker) {
+    const review = (d && d.review) || [];
+    if (d && d.learning) {
+      const n = review.length;
+      const days = d.learn_days || 7;
+      bannerHtml +=
+        `<div class="banner learn"><ha-icon icon="mdi:school-outline"></ha-icon>` +
+        `<div class="b-body"><b>Learning your network</b>` +
+        `<span>${n} device${n === 1 ? "" : "s"} seen in the last ${days} days. ` +
+        `Nothing is being blocked yet. Check the list, untick anything you ` +
+        `don't recognise, and protection starts.</span>` +
+        `<button class="b-go">Review ${n} device${n === 1 ? "" : "s"} and start protecting</button>` +
+        `</div></div>`;
+    } else if (d && d.breaker) {
+      const n = review.length;
       bannerHtml +=
         `<div class="banner warn"><ha-icon icon="mdi:shield-alert-outline"></ha-icon>` +
-        `<span>Too many unknown devices arrived at once, so nothing was blocked. ` +
-        `Clear the queue or raise the limit in the integration options.</span></div>`;
+        `<div class="b-body"><b>${n || "Several"} new devices showed up at once, so nothing was blocked</b>` +
+        `<span>This usually means a new device or a network change.</span>` +
+        (n ? `<button class="b-go">Review them</button>` : "") +
+        `</div></div>`;
     }
     root.getElementById("banner").innerHTML = bannerHtml;
 
@@ -2276,7 +2391,11 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     const live = d.online.filter((r) => r.live);
     const liveMacs = new Set(live.map((r) => r.mac));
-    const unknownLive = live.filter((r) => r.status === "unknown").length;
+    // Only devices that would actually be blocked count as unknown here. One
+    // outside the SSID scope, or never blocked, has no decision waiting.
+    const unknownLive = live.filter(
+      (r) => UnifiAllowlistPanel._stateOf(r) === "unknown"
+    ).length;
     const allowedLive = d.allowed.filter((e) => liveMacs.has(e.mac)).length;
     const deniedLive = d.denied.filter((e) => liveMacs.has(e.mac)).length;
     const offlinePending = d.pending.filter((p) => !p.live).length;
@@ -2295,12 +2414,19 @@ class UnifiAllowlistPanel extends HTMLElement {
     ];
     sub.textContent = (named ? [named, ...facts] : facts).join(" · ");
 
+    const pill = d.learning ? "learn" : d.enforcing ? "on" : "off";
     guard.innerHTML =
-      `<span class="status ${d.enforcing ? "on" : "off"}" title="${this._esc(
-        d.enforcing ? `Enforcing on: ${scope}` : "Nothing is being blocked"
+      `<span class="status ${pill}" title="${this._esc(
+        d.learning
+          ? "Learning your devices - nothing is blocked until setup is finished"
+          : d.enforcing
+          ? `Enforcing on: ${scope}`
+          : "Nothing is being blocked"
       )}">` +
       `<span class="beacon"></span>` +
-      `<span class="status-txt">${d.enforcing ? "Blocking on" : "Blocking off"}</span>` +
+      `<span class="status-txt">${
+        d.learning ? "Learning" : d.enforcing ? "Blocking on" : "Blocking off"
+      }</span>` +
       `<span class="status-scope">${this._esc(scope)}</span></span>`;
 
     const stats = [
@@ -2319,9 +2445,9 @@ class UnifiAllowlistPanel extends HTMLElement {
       {
         tab: "online",
         cls: "info",
-        icon: "mdi:wifi",
+        icon: "mdi:lan-connect",
         val: live.length,
-        title: "On wifi",
+        title: "Online",
         sub: unknownLive ? `${unknownLive} unknown` : "all known",
       },
       {
@@ -2330,7 +2456,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         icon: "mdi:shield-check-outline",
         val: d.allowed.length,
         title: "Allowed",
-        sub: `${allowedLive} on wifi`,
+        sub: `${allowedLive} online`,
       },
       {
         tab: "denied",
@@ -2338,7 +2464,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         icon: "mdi:cancel",
         val: d.denied.length,
         title: "Blocked",
-        sub: `${deniedLive} on wifi`,
+        sub: `${deniedLive} online`,
       },
     ];
 
@@ -2601,6 +2727,9 @@ class UnifiAllowlistPanel extends HTMLElement {
       const state = r.live ? "on" : "off";
       if (!want.includes(state)) return false;
     }
+    // Only the Online tab carries a state, so a saved choice here never
+    // empties the other tabs.
+    if (on("state") && r.state && !f.state.includes(r.state)) return false;
     if (on("ssid") && !f.ssid.includes(r.ssid)) return false;
     if (on("ap") && !f.ap.includes(r.ap)) return false;
     if (on("band") && !f.band.includes(r.band)) return false;
@@ -2615,7 +2744,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   _activeCount() {
     const f = this._filters || {};
-    return ["conn", "ssid", "ap", "band", "vendor"].reduce(
+    return ["conn", "state", "ssid", "ap", "band", "vendor"].reduce(
       (n, g) => n + ((f[g] || []).length ? 1 : 0),
       0
     );
@@ -2708,13 +2837,28 @@ class UnifiAllowlistPanel extends HTMLElement {
       .join("");
 
     const connHtml = [
-      ["on", "On wifi now"],
+      ["on", "Online now"],
       ["off", "Not connected"],
     ]
       .map(([v, label]) =>
         opt("conn", v, label, (f.conn || []).includes(v), countFor("conn", v))
       )
       .join("");
+
+    const states = [
+      ["unknown", "Unknown"],
+      ["unpoliced", "Unknown, not watched"],
+      ["allowed", "Allowed"],
+      ["denied", "Blocked"],
+    ].filter(([v]) => all.some((r) => r.state === v));
+    const stateHtml =
+      states.length > 1
+        ? states
+            .map(([v, label]) =>
+              opt("state", v, label, (f.state || []).includes(v), countFor("state", v))
+            )
+            .join("")
+        : "";
 
     const listFor = (group) =>
       uniq(group)
@@ -2725,7 +2869,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     body.innerHTML =
       section("Sort by", sortHtml) +
-      section("Status", connHtml) +
+      section("Status", connHtml + stateHtml) +
       section("Network", uniq("ssid").length > 1 ? listFor("ssid") : "") +
       section("Access point", uniq("ap").length > 1 ? listFor("ap") : "") +
       section("Band", uniq("band").length > 1 ? listFor("band") : "") +
@@ -2764,24 +2908,26 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
   }
 
+  /* The fifth field marks the technical ones, kept under Advanced so the
+     everyday sheet is three plain switches. */
   _cfgDefs() {
     return [
-      ["block_first", "toggle", "Block on sight, then ask",
-       "Off means an unknown device is reported but left connected."],
-      ["scan_interval", "number", "Check every",
-       "Seconds between reads of the connected device list. Lower is quicker to block; below 15 a busy run can overlap the next check."],
-      ["max_per_run", "number", "Stop if more than this arrive at once",
-       "A safety brake. If more unknown devices appear in one check, nothing is blocked and you get a warning."],
-      ["notify_gap", "number", "Pause between alerts",
-       "Seconds. Lower it if you shorten the check interval."],
+      ["block_first", "toggle", "Block new devices until you answer",
+       "Off means a new device is reported but left connected."],
+      ["include_wired", "toggle", "Also watch wired devices",
+       "Devices plugged into a cable, such as TVs, printers and servers, get the same approve-or-block treatment."],
+      ["deny_unnamed", "toggle", "Always block devices with no name",
+       "Catches cameras and other smart gear too, so check Waiting before turning it on."],
+      ["scan_interval", "number", "Check every (seconds)",
+       "How often the connected-device list is read. Lower is quicker to block; below 15 a busy run can overlap the next check.", true],
+      ["max_per_run", "number", "Safety brake: more than this at once",
+       "If more new devices than this appear in one check, nothing is blocked and you are asked to review them instead.", true],
+      ["notify_gap", "number", "Pause between alerts (seconds)",
+       "Stops phones dropping alerts that arrive back to back. Lower it if you shorten the check interval.", true],
       ["adopt_blocks", "toggle", "Adopt blocks made in UniFi",
-       "Move devices blocked in the UniFi UI into Blocked here."],
-      ["forget_in_unifi", "toggle", "Remove the client from UniFi when forgetting",
-       "Clients with an alias or a fixed IP are only unblocked."],
-      ["deny_unnamed", "toggle", "Always block devices that report no name",
-       "Catches cameras and IoT gear too. Check the waiting list first."],
-      ["include_wired", "toggle", "Also police wired clients",
-       "Turn blocking off first, then Allow all once your wired devices show up, or every server and printer trips the safety brake."],
+       "Devices you block by hand in UniFi show up under Blocked here.", true],
+      ["forget_in_unifi", "toggle", "Forget also removes the device from UniFi",
+       "Devices with an alias or a fixed IP set in UniFi are only unblocked.", true],
     ];
   }
 
@@ -2795,8 +2941,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       return;
     }
     const o = (this._data && this._data.options) || {};
-    const rows = this._cfgDefs()
-      .map(([key, kind, label, hint]) => {
+    const row = ([key, kind, label, hint]) => {
         const control =
           kind === "toggle"
             ? `<button class="sw" role="switch" data-key="${key}"
@@ -2808,8 +2953,10 @@ class UnifiAllowlistPanel extends HTMLElement {
                  aria-label="${this._esc(label)}">`;
         return `<div class="cfgrow"><span class="txt">${this._esc(label)}
                   <small>${this._esc(hint)}</small></span>${control}</div>`;
-      })
-      .join("");
+    };
+    const defs = this._cfgDefs();
+    const rows = defs.filter((d) => !d[4]).map(row).join("");
+    const adv = defs.filter((d) => d[4]).map(row).join("");
     const names = (o.deny_names || []).slice();
     const nameHtml = names.length
       ? names
@@ -2858,6 +3005,12 @@ class UnifiAllowlistPanel extends HTMLElement {
             changed, so this is noise control rather than security.</small></span>
           </div>
         </div></div></div>` +
+      `<div class="sheet-sec"><button class="advbtn" id="advbtn"
+          aria-expanded="${this._cfgAdv ? "true" : "false"}">
+          <ha-icon icon="mdi:chevron-${this._cfgAdv ? "up" : "down"}"></ha-icon>
+          Advanced</button>` +
+      (this._cfgAdv ? `<div class="sheet-group">${adv}</div>` : "") +
+      `</div>` +
       `<div class="sheet-sec"><h3>Elsewhere</h3><div class="sheet-group">` +
       `<div class="cfgrow"><span class="txt">Controller, site, networks and alerts
         <small>Settings &gt; Devices &amp; services &gt; UniFi Allow List &gt; Configure.
@@ -2969,6 +3122,130 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
   }
 
+  /* ---- review: finish setup, or sort out a tripped brake ---- */
+
+  _revRows() {
+    return (this._data && this._data.review) || [];
+  }
+
+  _openRev(open) {
+    const root = this.shadowRoot;
+    const sheet = root.getElementById("rev");
+    const bd = root.getElementById("rev-bd");
+    if (!sheet || !bd) return;
+    this._revOpen = Boolean(open);
+    if (this._revOpen) {
+      // Everything starts ticked: on a first run nearly all of it is yours.
+      this._revOff = new Set();
+      sheet.hidden = false;
+      this._renderRev();
+      window.requestAnimationFrame(() => {
+        sheet.classList.add("open");
+        bd.classList.add("open");
+      });
+    } else {
+      sheet.classList.remove("open");
+      bd.classList.remove("open");
+      window.setTimeout(() => {
+        if (!this._revOpen) sheet.hidden = true;
+      }, 240);
+    }
+  }
+
+  _renderRev() {
+    const root = this.shadowRoot;
+    const body = root.getElementById("rev-body");
+    if (!body) return;
+    const d = this._data || {};
+    const rows = this._revRows();
+    const off = this._revOff || new Set();
+    const learning = !!d.learning;
+    const days = d.learn_days || 7;
+
+    root.getElementById("rev-title").textContent = learning
+      ? "Finish setup"
+      : "Review new devices";
+
+    if (!rows.length) {
+      body.innerHTML =
+        `<div class="empty"><ha-icon icon="mdi:check-all"></ha-icon>` +
+        `<span>${learning ? "No devices found yet." : "Nothing left to review."}</span></div>`;
+    } else {
+      const intro = learning
+        ? `These are the devices seen on your network in the last ${days} days. ` +
+          `Ticked devices are trusted. Untick anything you don't recognise: it ` +
+          `will be blocked and wait for you under Waiting, where you can still ` +
+          `allow it. Devices worth a closer look are listed first.`
+        : `These arrived together, so nothing was blocked. Ticked devices are ` +
+          `trusted; unticked ones are blocked and wait for you under Waiting.`;
+      const items = rows
+        .map((r) => {
+          const on = !off.has(r.mac);
+          const flags = [];
+          if (r.random) flags.push("private (invented) address");
+          if (!r.hostname) flags.push("no name");
+          const meta = [
+            r.vendor,
+            r.ssid,
+            r.live ? "online now" : UnifiAllowlistPanel._ago(r.last_seen)
+              ? `last seen ${UnifiAllowlistPanel._ago(r.last_seen)}`
+              : "",
+            r.waiting ? "already waiting" : "",
+          ].filter(Boolean);
+          return `<button class="opt rev" role="checkbox" aria-checked="${on}"
+              data-mac="${this._esc(r.mac)}">
+            <span class="box"><ha-icon icon="mdi:check"></ha-icon></span>
+            <span class="nm">${this._esc(r.name || r.mac)}
+              <span class="meta">${
+                flags.length
+                  ? `<span class="flag">${this._esc(flags.join(", "))}</span> · `
+                  : ""
+              }${this._esc(meta.join(" · "))}<br>${this._esc(r.mac)}${
+                r.ip ? ` · ${this._esc(r.ip)}` : ""
+              }</span>
+            </span>
+          </button>`;
+        })
+        .join("");
+      body.innerHTML =
+        `<p class="rev-intro">${this._esc(intro)}</p>` +
+        `<div class="rev-all"><button data-revall="all">Tick all</button>` +
+        `<button data-revall="none">Untick all</button></div>` +
+        `<div class="sheet-group">${items}</div>`;
+    }
+
+    const held = rows.filter((r) => off.has(r.mac)).length;
+    const trust = rows.length - held;
+    const go = root.getElementById("rev-go");
+    go.disabled = !rows.length && !learning;
+    go.textContent = learning
+      ? `Trust ${trust} and start protecting`
+      : `Trust ${trust}${held ? `, hold ${held}` : ""}`;
+    root.getElementById("rev-sum").textContent = held
+      ? `${held} unticked device${held === 1 ? "" : "s"} will be blocked and wait under Waiting.`
+      : learning
+      ? "Nothing will be blocked until something new shows up."
+      : "";
+  }
+
+  async _applyRev() {
+    const rows = this._revRows();
+    const off = this._revOff || new Set();
+    const trust = rows.filter((r) => !off.has(r.mac)).map((r) => r.mac);
+    const block = rows.filter((r) => off.has(r.mac)).map((r) => r.mac);
+    const learning = !!(this._data && this._data.learning);
+    const go = this.shadowRoot.getElementById("rev-go");
+    if (go) go.disabled = true;
+    const ok = await this._call("apply_review", { trust, block });
+    if (go) go.disabled = false;
+    if (!ok) return;
+    this._openRev(false);
+    this._notify(
+      learning ? "Setup finished - protection is on" : "Review applied",
+      "ok"
+    );
+  }
+
   _renderHist() {
     const body = this.shadowRoot.getElementById("hist-body");
     if (!body) return;
@@ -2979,7 +3256,13 @@ class UnifiAllowlistPanel extends HTMLElement {
         `<span>Nothing decided yet on this site.</span></div>`;
       return;
     }
-    const word = { allowed: "Allowed", blocked: "Blocked", forgot: "Forgot" };
+    const word = {
+      allowed: "Allowed",
+      blocked: "Blocked",
+      forgot: "Forgot",
+      setup: "Set up",
+      reviewed: "Reviewed",
+    };
     body.innerHTML =
       `<div class="sheet-sec"><div class="sheet-group">` +
       log
@@ -3018,10 +3301,15 @@ class UnifiAllowlistPanel extends HTMLElement {
         last_seen: r.last_seen || 0,
         live: r.live,
         status: r.live ? r.status : "off",
+        state: UnifiAllowlistPanel._stateOf(r),
         chips: [
           r.band ? { v: r.band, cls: "net", icon: "mdi:access-point" } : null,
           r.ssid ? { v: r.ssid, cls: "net", icon: UnifiAllowlistPanel._netIcon(r.ssid) } : null,
-          r.in_scope ? null : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
+          r.spared
+            ? { v: `never blocked: ${r.spared}`, cls: "off", icon: "mdi:shield-lock-outline" }
+            : r.in_scope
+            ? null
+            : { v: "not watched", cls: "off", icon: "mdi:shield-off-outline" },
           r.live ? null : UnifiAllowlistPanel._lastSeenChip(r.last_seen),
           r.vendor ? { v: r.vendor, cls: "off", icon: "mdi:factory" } : null,
         ],
@@ -3087,10 +3375,11 @@ class UnifiAllowlistPanel extends HTMLElement {
       status: liveMacs.has(e.mac) ? state : "off",
       // the verdict is a fact about the list, not about being connected
       verdict: state,
+      source: e.source || "",
       chips: [
         liveMacs.has(e.mac)
-          ? { v: "on wifi now", cls: "net", icon: "mdi:wifi" }
-          : { v: "not connected", cls: "off", icon: "mdi:wifi-off" },
+          ? { v: "online now", cls: "net", icon: "mdi:lan-connect" }
+          : { v: "not connected", cls: "off", icon: "mdi:lan-disconnect" },
         liveMacs.has(e.mac)
           ? null
           : e.known === false
@@ -3098,6 +3387,10 @@ class UnifiAllowlistPanel extends HTMLElement {
             // is indistinguishable from a device that is merely switched off.
             { v: "never seen here", cls: "off", icon: "mdi:help-circle-outline" }
           : UnifiAllowlistPanel._lastSeenChip(e.last_seen),
+        // Adopted from a block somebody made in the UniFi UI, not decided here.
+        e.source === "unifi"
+          ? { v: "blocked in UniFi", cls: "off", icon: "mdi:import" }
+          : null,
         e.vendor ? { v: e.vendor, cls: "off", icon: "mdi:factory" } : null,
       ],
       fields: [
@@ -3174,9 +3467,11 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (this._sheetOpen) this._renderSheet();
     if (this._histOpen) this._renderHist();
     if (this._cfgOpen) this._renderCfg();
+    if (this._revOpen) this._renderRev();
 
     if (!rows.length) {
       list.innerHTML =
+        this._bulkHtml(rows) +
         `<div class="empty"><ha-icon icon="${this._emptyIcon()}"></ha-icon>` +
         `<span>${this._esc(this._emptyText())}</span></div>`;
       return;
@@ -3266,19 +3561,38 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (this._tab === "pending") {
       n = rows.filter((r) => !r.live).length;
       if (!n) return "";
-      text = `${n} waiting device${n === 1 ? " is" : "s are"} no longer on the wifi.`;
+      text = `${n} waiting device${n === 1 ? " is" : "s are"} no longer connected.`;
       confirmText =
         `Forget all ${n} waiting device${n === 1 ? "" : "s"} that ` +
-        `${n === 1 ? "is" : "are"} not on the wifi now? They are not allowed or ` +
+        `${n === 1 ? "is" : "are"} not connected now? They are not allowed or ` +
         `denied - they just leave the queue.`;
       cta = `Forget all ${n}`;
       yes = `Yes, forget ${n}`;
     } else if (this._tab === "online") {
-      n = rows.filter((r) => r.status === "unknown").length;
-      if (!n) return "";
+      n = rows.filter((r) => r.live && r.state === "unknown").length;
+      if (!n) {
+        const quiet = rows.filter((r) => r.live && r.state === "unpoliced").length;
+        // Tapping narrows the list to just these, and back again. Kept on
+        // screen while narrowed, even once they have gone, so the way back
+        // never disappears.
+        const only = (this._filters.state || []).join() === "unpoliced";
+        if (!quiet && !only) return "";
+        return `<div class="bulk quiet">
+            <ha-icon icon="mdi:shield-off-outline"></ha-icon>
+            <span class="txt">${
+              quiet
+                ? `${quiet} unknown device${
+                    quiet === 1 ? " is" : "s are"
+                  } not watched, so nothing is waiting on you.`
+                : "No unwatched devices are online now."
+            }</span>
+            <span class="btns"><button data-bulk="unwatched">${
+              only ? "Show all devices" : quiet === 1 ? "Show it" : "Show them"
+            }</button></span></div>`;
+      }
       text = `${n} device${n === 1 ? " is" : "s are"} waiting on a decision.`;
       confirmText =
-        `Approve all ${n} unknown device${n === 1 ? "" : "s"} on wifi right now? ` +
+        `Approve all ${n} unknown device${n === 1 ? "" : "s"} online right now? ` +
         `This cannot be undone in one step.`;
       cta = `Allow all ${n}`;
       yes = `Yes, allow ${n}`;
@@ -3389,6 +3703,13 @@ class UnifiAllowlistPanel extends HTMLElement {
       if (re.test(n)) return icon;
     }
     return "mdi:lan-connect";
+  }
+
+  // unknown: would be blocked, so a decision is owed. unpoliced: unknown, but
+  // outside the SSID scope or one of the few never blocked.
+  static _stateOf(r) {
+    if (r.status !== "unknown") return r.status;
+    return r.in_scope === false || r.spared ? "unpoliced" : "unknown";
   }
 
   // Wired clients carry "Wired" where a wifi client has its SSID.

@@ -63,6 +63,7 @@ from .const import (
     DEFAULT_NOTIFY_GAP,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    ENTRY_TITLE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +99,29 @@ def _as_list(value) -> list[str]:
     if isinstance(value, str):
         return [value]
     return [v for v in value if v]
+
+
+def _scope_from_ticks(ticked, networks: list[str]) -> list[str] | None:
+    """Stored SSID scope for what was ticked, or None if nothing was.
+
+    Every network ticked is stored as an empty scope, which means "all" - so a
+    network added in UniFi later is watched too, rather than silently left out.
+    """
+    ticked = [t for t in (ticked or []) if t]
+    if not ticked:
+        return None
+    if networks and set(networks) <= set(ticked):
+        return []
+    return ticked
+
+
+def _phones(services: list[str]) -> list[str]:
+    """The companion-app targets, ticked by default at setup.
+
+    Approve and deny buttons only work there, so they are nearly always what
+    somebody wants; the full list is still offered.
+    """
+    return [s for s in services if s.startswith("mobile_app_")]
 
 
 def _notify_services(hass) -> list[str]:
@@ -188,9 +212,12 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 (s.get("desc") or site for s in self._sites if s.get("name") == site),
                 site,
             )
-            data = {**self._creds, CONF_SITE: site}
-            options = {CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY))}
-            return self.async_create_entry(title=f"Wifi Access ({label})", data=data, options=options)
+            self._picked = {
+                "site": site,
+                "label": label,
+                CONF_NOTIFY: _as_list(user_input.get(CONF_NOTIFY)),
+            }
+            return await self.async_step_networks()
 
         all_sites = [s for s in self._sites if s.get("name")]
         matches = _match_sites(all_sites, search)
@@ -221,7 +248,9 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         options=site_options, mode=SelectSelectorMode.DROPDOWN
                     )
                 ),
-                vol.Optional(CONF_NOTIFY, default=[]): SelectSelector(
+                vol.Optional(
+                    CONF_NOTIFY, default=_phones(notify_options)
+                ): SelectSelector(
                     SelectSelectorConfig(
                         options=notify_options,
                         mode=SelectSelectorMode.DROPDOWN,
@@ -245,6 +274,115 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         return UnifiAllowlistOptionsFlow()
+
+
+    async def async_step_networks(self, user_input: dict | None = None):
+        """What to watch: which wifi networks, and whether wired devices too.
+
+        Asked after the site, since the networks belong to it.
+        """
+        picked = self._picked
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            networks = getattr(self, "_networks", [])
+            scope = _scope_from_ticks(user_input.get(CONF_SSIDS), networks)
+            if scope is None and networks:
+                errors["base"] = "no_network"
+            else:
+                data = {**self._creds, CONF_SITE: picked["site"]}
+                options = {
+                    CONF_NOTIFY: picked[CONF_NOTIFY],
+                    CONF_SSIDS: scope or [],
+                    CONF_INCLUDE_WIRED: bool(
+                        user_input.get(CONF_INCLUDE_WIRED, False)
+                    ),
+                }
+                return self.async_create_entry(
+                    title=f"{ENTRY_TITLE} ({picked['label']})",
+                    data=data,
+                    options=options,
+                )
+            return self._networks_form(errors, user_input)
+
+        networks: list[str] = []
+        note = ""
+        session = async_get_clientsession(
+            self.hass, verify_ssl=self._creds.get(CONF_VERIFY_SSL, False)
+        )
+        client = UnifiClient(
+            session,
+            self._creds[CONF_HOST],
+            picked["site"],
+            self._creds[CONF_API_KEY],
+            self._creds.get(CONF_VERIFY_SSL, False),
+        )
+        try:
+            wlans = await client.wlans()
+            networks = sorted(
+                {
+                    str(w.get("name"))
+                    for w in (wlans if isinstance(wlans, list) else [])
+                    if isinstance(w, dict) and w.get("name")
+                },
+                key=str.casefold,
+            )
+            if not networks:
+                _LOGGER.warning(
+                    "no wifi networks listed for site %s: %r",
+                    picked["site"],
+                    wlans if not isinstance(wlans, list) else f"{len(wlans)} rows",
+                )
+                note = (
+                    "\n\nNo wifi networks were found for this site. Leave the "
+                    "list empty to watch every network, or type a network name."
+                )
+        except UnifiError as err:
+            # Not fatal: leaving the list empty watches every network. Said on
+            # the form, so a failure is visible rather than an empty list.
+            _LOGGER.warning("could not list wifi networks for %s: %s", picked["site"], err)
+            note = (
+                f"\n\nCould not read this site's wifi networks ({err}). Leave the "
+                "list empty to watch every network, or type a network name."
+            )
+
+        self._networks = networks
+        self._net_note = note
+        return self._networks_form(errors)
+
+    def _networks_form(self, errors: dict, user_input: dict | None = None):
+        networks = getattr(self, "_networks", [])
+        user_input = user_input or {}
+        schema = vol.Schema(
+            {
+                # Everything ticked to start with: watching every network is
+                # the safe default, and unticking is how you leave one alone.
+                vol.Optional(
+                    CONF_SSIDS, default=user_input.get(CONF_SSIDS, list(networks))
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=networks,
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST,
+                        # Allowing typed values turns the list into a hidden
+                        # dropdown, so only allow it when nothing was found.
+                        custom_value=not networks,
+                    )
+                ),
+                vol.Optional(
+                    CONF_INCLUDE_WIRED,
+                    default=user_input.get(CONF_INCLUDE_WIRED, DEFAULT_INCLUDE_WIRED),
+                ): BooleanSelector(),
+            }
+        )
+        return self.async_show_form(
+            step_id="networks",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "site": self._picked["label"],
+                "note": getattr(self, "_net_note", ""),
+            },
+        )
 
 
 class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
@@ -277,7 +415,22 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict | None = None):
         entry = self.config_entry
 
-        if user_input is not None:
+        ssid_choices: list[str] = []
+        data = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if data:
+            ssid_choices = sorted(
+                n for n in data["coordinator"].wlan_names.values() if n
+            )
+
+        errors: dict[str, str] = {}
+        if user_input is not None and CONF_SSIDS in user_input:
+            scope = _scope_from_ticks(user_input.get(CONF_SSIDS), ssid_choices)
+            if scope is None and ssid_choices:
+                errors["base"] = "no_network"
+            else:
+                user_input = {**user_input, CONF_SSIDS: scope or []}
+
+        if user_input is not None and not errors:
             merged = {**entry.options, **user_input}
             merged[CONF_SCAN_INTERVAL] = int(merged[CONF_SCAN_INTERVAL])
             merged[CONF_LOOKBACK] = int(merged[CONF_LOOKBACK])
@@ -287,14 +440,9 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
             merged[CONF_NOTIFY] = _as_list(merged.get(CONF_NOTIFY))
             return self.async_create_entry(title="", data=merged)
 
-        ssid_choices: list[str] = []
-        data = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if data:
-            ssid_choices = sorted(
-                n for n in data["coordinator"].wlan_names.values() if n
-            )
-
         current = entry.options
+        # An empty scope means every network, so show every network ticked.
+        ticked = list(current.get(CONF_SSIDS, []) or []) or list(ssid_choices)
 
         schema = vol.Schema(
             {
@@ -308,14 +456,16 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                         multiple=True,
                     )
                 ),
-                vol.Optional(
-                    CONF_SSIDS, default=current.get(CONF_SSIDS, [])
-                ): SelectSelector(
+                vol.Optional(CONF_SSIDS, default=ticked): SelectSelector(
                     SelectSelectorConfig(
-                        options=ssid_choices,
+                        options=sorted(
+                            set(ssid_choices) | set(current.get(CONF_SSIDS, []))
+                        ),
                         multiple=True,
                         mode=SelectSelectorMode.LIST,
-                        custom_value=True,
+                        # Tick boxes when the networks are known; typing only
+                        # when they are not, since that hides the list.
+                        custom_value=not ssid_choices,
                     )
                 ),
                 vol.Optional(
@@ -401,4 +551,4 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                 **self._sms_fields(current),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

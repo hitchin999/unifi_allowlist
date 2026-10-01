@@ -108,8 +108,8 @@ prune:
   name: Prune stale devices
   description: >-
     Forget offline wireless clients on the controller and drop them from the
-    allow list. Wired devices are skipped unless wired clients are being
-    policed; denied and pending devices are always skipped.
+    allow list. Wired devices are skipped unless wired devices are being
+    watched; denied and pending devices are always skipped.
   fields:
     days:
       name: Not seen for (days)
@@ -225,7 +225,9 @@ allow_online_unknown:
   description: >-
     Approve every unknown device currently connected. Intended for setting up a
     new site: turn enforcement off, let the list fill with the devices you
-    already trust, run this once, then turn enforcement back on.
+    already trust, run this once, then turn enforcement back on. Devices that
+    are not watched - outside the chosen wifi networks, or never blocked, such as this
+    Home Assistant host - are left alone.
   fields:
     site:
       name: Site
@@ -296,6 +298,40 @@ accept_list_size:
     list as correct. Only use this when you know the smaller list is right, for
     example after editing storage by hand. Restoring a backup is the usual fix.
   fields:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
+
+apply_review:
+  name: Apply a device review
+  description: >-
+    Trust some devices and hold the rest for a decision, in one go. While the
+    site is still learning (first run), this also finishes setup and starts
+    protecting. Held devices are blocked when "Block on sight" is on, and
+    queued in Waiting either way.
+  fields:
+    trust:
+      name: Trust
+      description: MAC addresses to add to the allow list.
+      required: false
+      example: '["a4:83:e7:12:34:56"]'
+      selector:
+        text:
+          multiple: true
+    block:
+      name: Hold for review
+      description: MAC addresses to block and queue in Waiting.
+      required: false
+      example: '["de:ad:be:ef:00:01"]'
+      selector:
+        text:
+          multiple: true
     site:
       name: Site
       description: >-

@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -37,9 +38,16 @@ class EnforcementSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return self.coordinator.enforcing
+        return self.coordinator.enforcing and not self.coordinator.learning
 
     async def async_turn_on(self, **kwargs) -> None:
+        if self.coordinator.learning:
+            # Switching on with no allow list would block the whole network.
+            # Setup finishes in the panel, where the list gets made first.
+            raise HomeAssistantError(
+                "Still learning your devices. Open UniFi Allow List in the "
+                "sidebar and finish setup to start protecting."
+            )
         self.coordinator.enforcing = True
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()

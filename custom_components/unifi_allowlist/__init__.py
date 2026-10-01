@@ -8,7 +8,7 @@ import os
 
 import voluptuous as vol
 
-from homeassistant.components import frontend
+from homeassistant.components import frontend, persistent_notification
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -29,6 +29,12 @@ from .const import (
     ATTR_NAME,
     ATTR_PATH,
     ATTR_TARGET,
+    ATTR_BLOCK,
+    ATTR_TRUST,
+    ENTRY_TITLE,
+    LEARN_DAYS,
+    OLD_ENTRY_PREFIX,
+    SERVICE_APPLY_REVIEW,
     CONF_HOST,
     CONF_SITE,
     CONF_VERIFY_SSL,
@@ -109,6 +115,13 @@ NAME_SCHEMA = vol.Schema(
         vol.Optional(ATTR_NAME, default=""): cv.string,
     }
 )
+REVIEW_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_TRUST, default=[]): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(ATTR_BLOCK, default=[]): vol.All(cv.ensure_list, [cv.string]),
+        **SITE_FIELD,
+    }
+)
 PRUNE_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_DAYS, default=7): vol.Coerce(int),
@@ -120,6 +133,13 @@ PRUNE_SCHEMA = vol.Schema(
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up one UniFi site."""
+    # Older versions named entries "Wifi Access (Site)". Only that exact,
+    # generated shape is renamed - a title somebody typed is left alone.
+    if entry.title.startswith(OLD_ENTRY_PREFIX) and entry.title.endswith(")"):
+        hass.config_entries.async_update_entry(
+            entry, title=f"{ENTRY_TITLE} ({entry.title[len(OLD_ENTRY_PREFIX):]}"
+        )
+
     session = async_get_clientsession(
         hass, verify_ssl=entry.data.get(CONF_VERIFY_SSL, False)
     )
@@ -150,6 +170,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    if store.learning:
+        persistent_notification.async_create(
+            hass,
+            f"{coordinator.site_label} is in **learning mode**: it is collecting "
+            f"every device seen on your network in the last {LEARN_DAYS} days, "
+            "and **nothing is being blocked**.\n\n"
+            "When you are ready, open UniFi Allow List, check the list, and tap "
+            "**Trust these and start protecting**.\n\n"
+            f"[Open UniFi Allow List](/{PANEL_URL_PATH})",
+            title="UniFi Allow List is learning your devices",
+            notification_id=coordinator.learning_notice_id,
+        )
 
     return True
 
@@ -393,6 +426,18 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 dry_run=call.data.get(ATTR_DRY_RUN, True),
                 reblock=call.data.get(ATTR_REBLOCK, True),
             )
+
+    async def _apply_review(call):
+        if coord := _target(hass, call):
+            await coord.async_apply_review(
+                call.data.get(ATTR_TRUST, []),
+                call.data.get(ATTR_BLOCK, []),
+                actor=await _actor(hass, call),
+            )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_APPLY_REVIEW, _apply_review, schema=REVIEW_SCHEMA
+    )
 
     async def _forget_offline(call):
         if coord := _target(hass, call):
@@ -655,6 +700,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
                         "vendor": vendors.get(mac, ""),
                         "known": mac in on_controller,
                         "review": False,
+                        # "unifi" when adopted from a block made in the UniFi UI.
+                        "source": (info or {}).get("source", ""),
                     }
                     for mac, info in store.denied.items()
                 ]
@@ -679,7 +726,12 @@ class UnifiAllowlistDataView(HomeAssistantView):
                 "label": coord.site_label,
                 "controller": coord.controller_label,
                 "sites": sites,
-                "enforcing": coord.enforcing,
+                "enforcing": coord.enforcing and not coord.learning,
+                "learning": coord.learning,
+                "learn_days": LEARN_DAYS,
+                # Devices for the review screen: everything found while
+                # learning, or the arrivals that tripped the brake.
+                "review": coord.review_rows,
                 "ssids": sorted(n for n in coord.wlan_names.values() if n),
                 # Access points only. ap_names covers every UniFi device on the
                 # site and would count switches and gateways too.
