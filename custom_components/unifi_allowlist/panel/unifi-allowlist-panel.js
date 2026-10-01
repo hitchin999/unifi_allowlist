@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.13.0";
+const PANEL_VERSION = "1.13.1";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -547,6 +547,10 @@ const STYLES = `
     background: var(--ua-card); color: var(--ua-warn);
   }
   .bulk button:hover { background: var(--ua-bg); }
+  .bulk.quiet {
+    background: var(--ua-card); border-color: var(--ua-line);
+    color: var(--ua-muted); font-weight: 500;
+  }
   .bulk button.confirm { background: var(--ua-warn); color: #fff; border-color: transparent; }
   .bulk button:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 2px; }
 
@@ -1281,14 +1285,14 @@ class UnifiAllowlistPanel extends HTMLElement {
   _loadPrefs() {
     if (this._sort !== undefined) return;
     this._sort = "name";
-    this._filters = { conn: [], ssid: [], ap: [], band: [], vendor: [] };
+    this._filters = { conn: [], state: [], ssid: [], ap: [], band: [], vendor: [] };
     try {
       const raw = window.localStorage.getItem("ual_view");
       if (raw) {
         const saved = JSON.parse(raw) || {};
         if (typeof saved.sort === "string") this._sort = saved.sort;
         if (saved.filters && typeof saved.filters === "object") {
-          for (const k of ["conn", "ssid", "ap", "band", "vendor"]) {
+          for (const k of ["conn", "state", "ssid", "ap", "band", "vendor"]) {
             if (Array.isArray(saved.filters[k])) this._filters[k] = saved.filters[k];
           }
         }
@@ -1882,7 +1886,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     root.getElementById("sheet-x").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-done").addEventListener("click", () => this._openSheet(false));
     root.getElementById("sheet-clear").addEventListener("click", () => {
-      this._filters = { conn: [], ssid: [], ap: [], band: [], vendor: [] };
+      this._filters = { conn: [], state: [], ssid: [], ap: [], band: [], vendor: [] };
       this._sort = "name";
       this._resetPaging();
       this._savePrefs();
@@ -2276,7 +2280,11 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     const live = d.online.filter((r) => r.live);
     const liveMacs = new Set(live.map((r) => r.mac));
-    const unknownLive = live.filter((r) => r.status === "unknown").length;
+    // Only devices that would actually be blocked count as unknown here. One
+    // outside the SSID scope, or never blocked, has no decision waiting.
+    const unknownLive = live.filter(
+      (r) => UnifiAllowlistPanel._stateOf(r) === "unknown"
+    ).length;
     const allowedLive = d.allowed.filter((e) => liveMacs.has(e.mac)).length;
     const deniedLive = d.denied.filter((e) => liveMacs.has(e.mac)).length;
     const offlinePending = d.pending.filter((p) => !p.live).length;
@@ -2601,6 +2609,9 @@ class UnifiAllowlistPanel extends HTMLElement {
       const state = r.live ? "on" : "off";
       if (!want.includes(state)) return false;
     }
+    // Only the On wifi tab carries a state, so a saved choice here never
+    // empties the other tabs.
+    if (on("state") && r.state && !f.state.includes(r.state)) return false;
     if (on("ssid") && !f.ssid.includes(r.ssid)) return false;
     if (on("ap") && !f.ap.includes(r.ap)) return false;
     if (on("band") && !f.band.includes(r.band)) return false;
@@ -2615,7 +2626,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
   _activeCount() {
     const f = this._filters || {};
-    return ["conn", "ssid", "ap", "band", "vendor"].reduce(
+    return ["conn", "state", "ssid", "ap", "band", "vendor"].reduce(
       (n, g) => n + ((f[g] || []).length ? 1 : 0),
       0
     );
@@ -2716,6 +2727,21 @@ class UnifiAllowlistPanel extends HTMLElement {
       )
       .join("");
 
+    const states = [
+      ["unknown", "Unknown"],
+      ["unpoliced", "Unknown, not policed"],
+      ["allowed", "Allowed"],
+      ["denied", "Blocked"],
+    ].filter(([v]) => all.some((r) => r.state === v));
+    const stateHtml =
+      states.length > 1
+        ? states
+            .map(([v, label]) =>
+              opt("state", v, label, (f.state || []).includes(v), countFor("state", v))
+            )
+            .join("")
+        : "";
+
     const listFor = (group) =>
       uniq(group)
         .map((v) =>
@@ -2725,7 +2751,7 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     body.innerHTML =
       section("Sort by", sortHtml) +
-      section("Status", connHtml) +
+      section("Status", connHtml + stateHtml) +
       section("Network", uniq("ssid").length > 1 ? listFor("ssid") : "") +
       section("Access point", uniq("ap").length > 1 ? listFor("ap") : "") +
       section("Band", uniq("band").length > 1 ? listFor("band") : "") +
@@ -3018,10 +3044,15 @@ class UnifiAllowlistPanel extends HTMLElement {
         last_seen: r.last_seen || 0,
         live: r.live,
         status: r.live ? r.status : "off",
+        state: UnifiAllowlistPanel._stateOf(r),
         chips: [
           r.band ? { v: r.band, cls: "net", icon: "mdi:access-point" } : null,
           r.ssid ? { v: r.ssid, cls: "net", icon: UnifiAllowlistPanel._netIcon(r.ssid) } : null,
-          r.in_scope ? null : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
+          r.spared
+            ? { v: `never blocked: ${r.spared}`, cls: "off", icon: "mdi:shield-lock-outline" }
+            : r.in_scope
+            ? null
+            : { v: "not policed", cls: "off", icon: "mdi:shield-off-outline" },
           r.live ? null : UnifiAllowlistPanel._lastSeenChip(r.last_seen),
           r.vendor ? { v: r.vendor, cls: "off", icon: "mdi:factory" } : null,
         ],
@@ -3274,8 +3305,16 @@ class UnifiAllowlistPanel extends HTMLElement {
       cta = `Forget all ${n}`;
       yes = `Yes, forget ${n}`;
     } else if (this._tab === "online") {
-      n = rows.filter((r) => r.status === "unknown").length;
-      if (!n) return "";
+      n = rows.filter((r) => r.live && r.state === "unknown").length;
+      if (!n) {
+        const quiet = rows.filter((r) => r.live && r.state === "unpoliced").length;
+        if (!quiet) return "";
+        return `<div class="bulk quiet">
+            <ha-icon icon="mdi:shield-off-outline"></ha-icon>
+            <span class="txt">${quiet} unknown device${
+              quiet === 1 ? " is" : "s are"
+            } not policed, so nothing is waiting on you.</span></div>`;
+      }
       text = `${n} device${n === 1 ? " is" : "s are"} waiting on a decision.`;
       confirmText =
         `Approve all ${n} unknown device${n === 1 ? "" : "s"} on wifi right now? ` +
@@ -3389,6 +3428,13 @@ class UnifiAllowlistPanel extends HTMLElement {
       if (re.test(n)) return icon;
     }
     return "mdi:lan-connect";
+  }
+
+  // unknown: would be blocked, so a decision is owed. unpoliced: unknown, but
+  // outside the SSID scope or one of the few never blocked.
+  static _stateOf(r) {
+    if (r.status !== "unknown") return r.status;
+    return r.in_scope === false || r.spared ? "unpoliced" : "unknown";
   }
 
   // Wired clients carry "Wired" where a wifi client has its SSID.

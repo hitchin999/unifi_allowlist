@@ -108,7 +108,7 @@ def _serves_wifi(dev: dict) -> bool:
     return bool(dev.get("radio_table"))
 
 
-def _own_ips(host: str) -> set[str]:
+def _own_ips(host: str) -> dict[str, str]:
     """Addresses this machine and the controller answer on.
 
     A UDP connect sends nothing; it only asks the kernel which local address
@@ -116,16 +116,16 @@ def _own_ips(host: str) -> set[str]:
     Home Assistant host. Blocking either of these would cut the integration off
     from the very controller it needs to undo the block.
     """
-    ips: set[str] = set()
+    ips: dict[str, str] = {}
     name = urlparse(host).hostname or ""
     if not name:
         return ips
     try:
         target = socket.gethostbyname(name)
-        ips.add(target)
+        ips[target] = "the controller"
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect((target, 9))
-            ips.add(sock.getsockname()[0])
+            ips.setdefault(sock.getsockname()[0], "this Home Assistant host")
     except OSError as err:
         _LOGGER.debug("could not work out local addresses: %s", err)
     return ips
@@ -180,7 +180,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._known_cache: list[dict] = []
         self._known_cache_at = 0.0
         # Filled on first poll; see _own_ips.
-        self._own_ips: set[str] | None = None
+        self._own_ips: dict[str, str] | None = None
         self._spared_logged: set[str] = set()
 
         super().__init__(
@@ -531,7 +531,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return True
         return wired is True and self.include_wired
 
-    def _spared(self, mac: str, rec: dict) -> bool:
+    def _spared(self, mac: str, rec: dict) -> str:
         """Never block the controller, this host, or UniFi gear itself.
 
         Only reachable with wired clients on - none of these join over wifi -
@@ -539,15 +539,14 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         integration off from the controller it needs to undo the block.
         """
         ip = rec.get("ip") or rec.get("last_ip") or ""
-        hit = mac in self.ap_names or (ip and ip in (self._own_ips or set()))
+        if mac in self.ap_names:
+            hit = "a UniFi device"
+        else:
+            hit = (self._own_ips or {}).get(ip, "") if ip else ""
         if hit and mac not in self._spared_logged:
             self._spared_logged.add(mac)
-            _LOGGER.info(
-                "never blocking %s (%s): controller, this host or UniFi gear",
-                mac,
-                ip,
-            )
-        return bool(hit)
+            _LOGGER.info("never blocking %s (%s): %s", mac, ip, hit)
+        return hit
 
     def apply_options(self) -> None:
         self.update_interval = timedelta(
@@ -865,6 +864,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         label = self.store.label_for(mac)
         reported = self._display_name(rec)
+        spared = self._spared(mac, rec)
 
         return {
             "mac": mac,
@@ -880,7 +880,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             "live": is_live,
             "last_seen": self._last_seen_of(mac, rec, is_live),
             "vendor": str(rec.get("oui") or "") or self.vendors.get(mac, ""),
-            "in_scope": self._in_scope(rec) and not self._spared(mac, rec),
+            "in_scope": self._in_scope(rec) and not spared,
+            # Why it is never blocked, when it is one of the protected few.
+            "spared": spared,
             "status": status,
         }
 
@@ -1170,9 +1172,16 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def async_allow_online_unknown(self) -> int:
-        """Approve every unknown device currently on wifi, in one pass."""
+        """Approve every policed unknown device currently connected, in one pass.
+
+        Devices outside the SSID scope, and the protected few that are never
+        blocked, are left off: nothing would ever block them, so there is no
+        decision to make.
+        """
         macs = [
-            r["mac"] for r in self.online if r["live"] and r["status"] == "unknown"
+            r["mac"]
+            for r in self.online
+            if r["live"] and r["status"] == "unknown" and r.get("in_scope", True)
         ]
         if not macs:
             return 0

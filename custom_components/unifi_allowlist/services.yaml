@@ -225,7 +225,9 @@ allow_online_unknown:
   description: >-
     Approve every unknown device currently connected. Intended for setting up a
     new site: turn enforcement off, let the list fill with the devices you
-    already trust, run this once, then turn enforcement back on.
+    already trust, run this once, then turn enforcement back on. Devices that
+    are not policed - outside the SSID scope, or never blocked, such as this
+    Home Assistant host - are left alone.
   fields:
     site:
       name: Site

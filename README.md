@@ -122,7 +122,7 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 | `unifi_allowlist.deny` | Add a MAC to the deny list and block it |
 | `unifi_allowlist.forget` | Remove a MAC from every list |
 | `unifi_allowlist.set_name` | Give a device your own name |
-| `unifi_allowlist.allow_online_unknown` | Approve every unknown device currently on wifi |
+| `unifi_allowlist.allow_online_unknown` | Approve every policed unknown device currently connected |
 | `unifi_allowlist.resend_pending` | Re-notify everything still waiting |
 | `unifi_allowlist.unblock_all` | Clear every block on the controller |
 | `unifi_allowlist.prune` | Forget stale offline clients |
@@ -192,6 +192,11 @@ last seen, IP, access point or MAC, and filter by status, network, access point
 or band. Choices within a group are OR'd and groups are AND'd together, so
 "Camp + Guest, on wifi now" reads the way you would expect.
 
+On the **On wifi now** tab, Status also splits devices into Unknown, Unknown
+but not policed, Allowed and Blocked. Only Unknown means a decision is owed: a
+device outside the SSID scope, or one of the few that are never blocked, is
+never queued, so it is not counted as waiting.
+
 Each choice carries a count that ignores its own group, so you can see what
 selecting it would bring in. Only groups with more than one value on the
 current tab are shown, and the button carries a badge with the number of active
@@ -257,7 +262,9 @@ policed, whatever that list says.
 
 Three things are never blocked, whatever the lists say: the controller, the
 Home Assistant host (the address it uses to reach the controller), and UniFi
-devices themselves. Blocking any of them could cut Home Assistant off from the
+devices themselves. The panel tags them **never blocked** with the reason, and
+leaves them out of the unknown counts and **Allow all**, since there is no
+decision to make about them. Blocking any of them could cut Home Assistant off from the
 controller it needs to undo the block. Anything else you cannot afford to lose
 — a NAS, a DNS server, a hypervisor — should be on the allow list before you
 switch this on.
