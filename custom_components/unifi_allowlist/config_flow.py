@@ -327,7 +327,9 @@ class UnifiAllowlistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         options=networks,
                         multiple=True,
                         mode=SelectSelectorMode.LIST,
-                        custom_value=True,
+                        # Allowing typed values turns the list into a hidden
+                        # dropdown, so only allow it when nothing was found.
+                        custom_value=not networks,
                     )
                 ),
                 vol.Optional(
@@ -407,10 +409,14 @@ class UnifiAllowlistOptionsFlow(config_entries.OptionsFlow):
                     CONF_SSIDS, default=current.get(CONF_SSIDS, [])
                 ): SelectSelector(
                     SelectSelectorConfig(
-                        options=ssid_choices,
+                        options=sorted(
+                            set(ssid_choices) | set(current.get(CONF_SSIDS, []))
+                        ),
                         multiple=True,
                         mode=SelectSelectorMode.LIST,
-                        custom_value=True,
+                        # Tick boxes when the networks are known; typing only
+                        # when they are not, since that hides the list.
+                        custom_value=not ssid_choices,
                     )
                 ),
                 vol.Optional(
