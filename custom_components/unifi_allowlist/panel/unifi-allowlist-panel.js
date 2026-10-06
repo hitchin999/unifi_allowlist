@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.13.0";
+const PANEL_VERSION = "1.13.1";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing

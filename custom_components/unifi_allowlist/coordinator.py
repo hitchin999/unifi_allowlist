@@ -95,6 +95,15 @@ def _norm_mac(mac: str) -> str:
     return str(mac or "").strip().lower()
 
 
+def _configured_in_unifi(rec: dict) -> bool:
+    """An alias or a fixed IP: somebody set this client up on purpose.
+
+    forget-sta would wipe that with no undo, so neither Forget nor Prune ever
+    forgets such a client.
+    """
+    return bool(str(rec.get("name") or "").strip() or rec.get("use_fixedip"))
+
+
 def _random_mac(mac: str) -> bool:
     """A locally administered address - what a phone's private wifi address is.
 
@@ -626,6 +635,11 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             self._own_ips = await self.hass.async_add_executor_job(
                 _own_ips, self.client.host
             )
+        # UniFi gear is protected by MAC, so the device list has to be read
+        # before the guard - on the first check after a restart it is empty.
+        if time.time() - self._devices_stamp > DEVICE_CACHE_SECONDS:
+            await self._refresh_devices()
+
         # Before anything that can block: the sync, enforcement, a review.
         await self._guard_protected(known, active)
 
@@ -633,14 +647,11 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # Learning blocks nothing at all - including re-applying or adopting
         # blocks - so the first look at a network never changes it.
         if not self.learning:
-            await self._auto_sync()
+            await self._auto_sync(known)
         await self._flush_notify_backlog()
 
         if not self.wlan_names:
             await self._refresh_wlans()
-
-        if time.time() - self._devices_stamp > DEVICE_CACHE_SECONDS:
-            await self._refresh_devices()
 
         await self._backfill_names(known)
 
@@ -1477,7 +1488,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return {"forgotten": 0, "unblocked": 0}
 
         try:
-            known = await self._async_known_clients()
+            # Fresh, not the poll's copy: that can be a minute old, and an
+            # alias set in that minute must still protect the client.
+            known = await self._async_known_clients(max_age=0)
         except UnifiError as err:
             _LOGGER.warning("could not read clients before forgetting: %s", err)
             for mac in macs:
@@ -1489,7 +1502,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             mac = str(rec.get("mac") or "").lower()
             if mac not in macs:
                 continue
-            if str(rec.get("name") or "").strip() or rec.get("use_fixedip"):
+            if _configured_in_unifi(rec):
                 protected.add(mac)
 
         doomed = [m for m in macs if m not in protected]
@@ -1558,6 +1571,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         limit: int | None = None,
         refresh: bool = True,
         adopt_blocks: bool = True,
+        known: list[dict] | None = None,
     ) -> dict:
         """Reconcile our lists against what the controller actually enforces.
 
@@ -1573,11 +1587,15 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
 
         Nothing is unblocked. Removing enforcement is never done implicitly.
         """
-        try:
-            known = await self.client.known_clients()
-        except UnifiError as err:
-            _LOGGER.error("sync failed: %s", err)
-            return {"error": str(err), "adopted": 0, "reblocked": 0}
+        # The poll passes its own copy, refreshed once a minute; fetching the
+        # full list here would download it on every 15 s check. The service
+        # call, run by hand, still reads it fresh.
+        if known is None:
+            try:
+                known = await self.client.known_clients()
+            except UnifiError as err:
+                _LOGGER.error("sync failed: %s", err)
+                return {"error": str(err), "adopted": 0, "reblocked": 0}
 
         names: dict[str, str] = {}
         on_controller: set[str] = set()
@@ -1704,7 +1722,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             )
         return result
 
-    async def _auto_sync(self) -> None:
+    async def _auto_sync(self, known: list[dict]) -> None:
         """The same reconcile, run each poll when the option is on."""
         # Re-applying a block we already decided on is never a surprise, so it
         # runs unconditionally. Adopting somebody else's block is a judgement
@@ -1714,6 +1732,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             limit=ADOPT_LIMIT,
             refresh=False,
             adopt_blocks=bool(self._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)),
+            known=known,
         )
 
     async def async_accept_list_size(self) -> int:
@@ -1796,6 +1815,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         cutoff = int(time.time()) - int(days) * 86400
 
         doomed = []
+        kept = 0
         for rec in known:
             if not self._covers(rec):
                 continue
@@ -1806,7 +1826,17 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 continue
             if int(rec.get("last_seen") or 0) > cutoff:
                 continue
+            # Same rule as Forget: an alias or fixed IP is never wiped. These
+            # stay on the controller and in the allow list.
+            if _configured_in_unifi(rec):
+                kept += 1
+                continue
             doomed.append(mac)
+        if kept:
+            _LOGGER.info(
+                "prune: kept %d stale client(s) that have an alias or a fixed IP",
+                kept,
+            )
 
         # A device allowed ahead of time that never turned up appears in no
         # controller list at all, so the loop above can never see it. Without
@@ -1829,7 +1859,12 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             )
         doomed.extend(ghosts)
 
-        result = {"candidates": len(doomed), "days": days, "dry_run": dry_run}
+        result = {
+            "candidates": len(doomed),
+            "kept_configured": kept,
+            "days": days,
+            "dry_run": dry_run,
+        }
 
         if dry_run or not doomed:
             await self._notify_plain(
