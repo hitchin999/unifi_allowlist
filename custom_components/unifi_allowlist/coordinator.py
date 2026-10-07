@@ -1564,6 +1564,71 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         _LOGGER.info("forgot %d offline waiting device(s)", gone)
         return gone
 
+    async def async_forget_blocked(
+        self,
+        dry_run: bool = True,
+        include_connected: bool = False,
+        actor: str = "",
+    ) -> dict:
+        """Forget every device on the Blocked list, here and on the controller.
+
+        Clean-up for a list that has grown to thousands of randomised addresses.
+        Each device's block is lifted on the controller too - forgotten there
+        when "Forget also removes the device from UniFi" is on, unblocked
+        otherwise - or the sync would adopt it straight back into Blocked.
+        Devices connected right now are left alone unless asked for: unblocked,
+        they would turn up as new on the next check, all at once.
+        """
+        live = {r["mac"] for r in self.online if r.get("live")}
+        denied = list(self.store.denied)
+        macs = [m for m in denied if include_connected or m not in live]
+        skipped = len(denied) - len(macs)
+        result = {
+            "forgotten": len(macs),
+            "left_connected": skipped,
+            "dry_run": dry_run,
+        }
+
+        if dry_run or not macs:
+            _LOGGER.warning(
+                "forget_blocked preview: would forget %d blocked device(s)%s",
+                len(macs),
+                f", leaving {skipped} that are connected now" if skipped else "",
+            )
+            await self._notify_plain(
+                "Blocked list clean-up preview",
+                f"Would forget {len(macs)} blocked device(s)"
+                + (f" and leave {skipped} connected one(s)" if skipped else "")
+                + ". Nothing changed.",
+                icon="mdi:broom",
+            )
+            return result
+
+        await self.store.async_forget_many(macs)
+        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
+            # Forgets in batches, and only unblocks clients with an alias or a
+            # fixed IP, so nothing set up in UniFi is wiped.
+            await self._async_remove_from_controller(macs)
+        else:
+            for mac in macs:
+                await self._safe_unblock(mac)
+        for mac in macs:
+            await self.store.async_close_id(mac)
+
+        await self.async_record(
+            "forgot", "", f"{len(macs)} blocked device(s)", actor
+        )
+        _LOGGER.warning("forgot %d blocked device(s)", len(macs))
+        await self._notify_plain(
+            "Blocked list cleaned up",
+            f"Forgot {len(macs)} blocked device(s)"
+            + (f"; {skipped} connected one(s) left blocked" if skipped else "")
+            + ".",
+            icon="mdi:broom",
+        )
+        await self.async_request_refresh()
+        return result
+
     async def async_sync_from_unifi(
         self,
         dry_run: bool = True,

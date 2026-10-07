@@ -128,6 +128,7 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 | `unifi_allowlist.allow_online_unknown` | Approve every policed unknown device currently connected |
 | `unifi_allowlist.resend_pending` | Re-notify everything still waiting |
 | `unifi_allowlist.unblock_all` | Clear every block on the controller |
+| `unifi_allowlist.forget_blocked` | Forget every blocked device, here and in UniFi (dry run first; connected ones left alone by default) |
 | `unifi_allowlist.prune` | Forget stale offline clients |
 | `unifi_allowlist.import_list` | Seed a list from a file |
 | `unifi_allowlist.export_list` | Write a list out as JSON |
