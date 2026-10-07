@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import hashlib
 import os
@@ -70,6 +71,11 @@ from .const import (
     SERVICE_EXPORT_LIST,
     SERVICE_FORGET,
     SERVICE_FORGET_OFFLINE,
+    SERVICE_FORGET_BLOCKED,
+    SERVICE_BULK,
+    ATTR_ACTION,
+    ATTR_MACS,
+    ATTR_INCLUDE_CONNECTED,
     SERVICE_SYNC,
     SERVICE_ACCEPT_LIST_SIZE,
     SERVICE_UNBLOCK_UNTRACKED,
@@ -119,6 +125,20 @@ REVIEW_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_TRUST, default=[]): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional(ATTR_BLOCK, default=[]): vol.All(cv.ensure_list, [cv.string]),
+        **SITE_FIELD,
+    }
+)
+BULK_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ACTION): vol.In(["allow", "deny", "forget"]),
+        vol.Required(ATTR_MACS): vol.All(cv.ensure_list, [cv.string]),
+        **SITE_FIELD,
+    }
+)
+FORGET_BLOCKED_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_DRY_RUN, default=True): cv.boolean,
+        vol.Optional(ATTR_INCLUDE_CONNECTED, default=False): cv.boolean,
         **SITE_FIELD,
     }
 )
@@ -222,6 +242,15 @@ async def _async_asset_hash(hass: HomeAssistant) -> str:
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Serve the panel JS and put an item in the sidebar. Idempotent."""
+    # Several sites set up at once: without the lock each one passed the check
+    # below during the awaits, and all but the first failed to register the
+    # sidebar path the first had just taken.
+    lock = hass.data.setdefault(f"{DOMAIN}_panel_lock", asyncio.Lock())
+    async with lock:
+        await _async_register_frontend_locked(hass)
+
+
+async def _async_register_frontend_locked(hass: HomeAssistant) -> None:
     if hass.data.get(f"{DOMAIN}_panel"):
         return
 
@@ -446,6 +475,28 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_RESEND, _resend, schema=SITE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online, schema=SITE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline, schema=SITE_SCHEMA)
+
+    async def _forget_blocked(call):
+        if coord := _target(hass, call):
+            await coord.async_forget_blocked(
+                dry_run=call.data.get(ATTR_DRY_RUN, True),
+                include_connected=call.data.get(ATTR_INCLUDE_CONNECTED, False),
+                actor=await _actor(hass, call),
+            )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_FORGET_BLOCKED, _forget_blocked, schema=FORGET_BLOCKED_SCHEMA
+    )
+
+    async def _bulk(call):
+        if coord := _target(hass, call):
+            await coord.async_bulk(
+                call.data[ATTR_ACTION],
+                call.data[ATTR_MACS],
+                actor=await _actor(hass, call),
+            )
+
+    hass.services.async_register(DOMAIN, SERVICE_BULK, _bulk, schema=BULK_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_UNBLOCK_UNTRACKED, _unblock_untracked, schema=SITE_SCHEMA

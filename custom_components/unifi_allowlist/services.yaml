@@ -341,3 +341,70 @@ apply_review:
       selector:
         config_entry:
           integration: unifi_allowlist
+
+forget_blocked:
+  name: Forget all blocked devices
+  description: >-
+    Clean up the Blocked list: forget every device on it, here and on the
+    controller. Each block is lifted in UniFi too (the device is forgotten
+    there when "Forget also removes the device from UniFi" is on, otherwise
+    unblocked), so the sync does not pull it back. Clients with an alias or a
+    fixed IP in UniFi are only unblocked, never wiped. A forgotten device that
+    comes back is treated as new. Run with dry run first.
+  fields:
+    dry_run:
+      name: Dry run
+      description: Only count what would be forgotten, and send that as a notification.
+      default: true
+      selector:
+        boolean:
+    include_connected:
+      name: Include devices connected now
+      description: >-
+        Off leaves blocked devices that are online right now alone. Turning it
+        on unblocks them, and they come back as new devices on the next check.
+      default: false
+      selector:
+        boolean:
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist
+
+bulk_action:
+  name: Allow, block or forget several devices
+  description: >-
+    What the panel's multi-select uses: apply one action to a list of MAC
+    addresses in a single call. Forget also lifts the block in UniFi, so the
+    sync does not pull the device back into Blocked.
+  fields:
+    action:
+      name: Action
+      required: true
+      selector:
+        select:
+          options:
+            - allow
+            - deny
+            - forget
+    macs:
+      name: MAC addresses
+      required: true
+      example: '["a4:83:e7:12:34:56", "de:ad:be:ef:00:01"]'
+      selector:
+        text:
+          multiple: true
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist

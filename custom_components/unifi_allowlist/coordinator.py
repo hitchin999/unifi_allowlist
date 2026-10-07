@@ -212,6 +212,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # MAC -> why it is never blocked. Rebuilt every poll; every block goes
         # through _safe_block, which refuses anything in here.
         self._protected: dict[str, str] = {}
+        # MACs whose block or unblock is still being sent to the controller by
+        # a bulk job. The sync leaves them alone until it finishes, or it would
+        # see "blocked there, not ours" mid-job and adopt them straight back.
+        self._in_flight: set[str] = set()
         self._spared_logged: set[str] = set()
 
         super().__init__(
@@ -1537,8 +1541,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_record("forgot", mac, name, actor)
         # "As if never seen" has to include the controller, or our lists and
         # UniFi drift apart and a later sync adopts it straight back.
-        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
-            await self._async_remove_from_controller([mac])
+        await self._lift_blocks([mac])
         # Pull any outstanding prompt for it off every phone.
         await self.async_clear_notification(mac)
         await self.async_request_refresh()
@@ -1563,6 +1566,155 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
         _LOGGER.info("forgot %d offline waiting device(s)", gone)
         return gone
+
+    async def _lift_blocks(self, macs: list[str]) -> None:
+        """After forgetting, make sure UniFi is not still holding a block.
+
+        Forgotten there when "Forget also removes the device from UniFi" is on
+        (in batches, and only unblocked for clients with an alias or a fixed
+        IP), unblocked otherwise. A block left behind would be adopted straight
+        back into Blocked by the next sync.
+        """
+        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
+            await self._async_remove_from_controller(macs)
+        else:
+            for mac in macs:
+                await self._safe_unblock(mac)
+
+    def _controller_job(self, macs: list[str], work, label: str) -> None:
+        """Send a slow batch of controller changes in the background.
+
+        The lists are already updated when this starts, so the service call
+        returns at once instead of after minutes of controller calls. Until the
+        job ends its MACs are in _in_flight, which the sync skips.
+        """
+        macs = list(macs)
+        self._in_flight.update(macs)
+
+        async def _run() -> None:
+            try:
+                await work()
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("%s: controller job failed", label)
+            finally:
+                self._in_flight.difference_update(macs)
+                _LOGGER.info("%s: controller job finished for %d device(s)", label, len(macs))
+                await self.async_request_refresh()
+
+        self.hass.async_create_task(_run(), name=f"{DOMAIN} {label}")
+
+    async def async_bulk(self, action: str, macs: list[str], actor: str = "") -> int:
+        """Allow, block or forget many devices in one go, for the panel.
+
+        One storage write and one history line instead of hundreds, and the
+        same rules as the single actions: blocks go through the protection
+        gate, forgetting lifts the block in UniFi.
+        """
+        macs = [m for m in dict.fromkeys(_norm_mac(m) for m in macs or []) if m]
+        if not macs:
+            return 0
+
+        if action == "allow":
+            held = [
+                m for m in macs if self.store.is_pending(m) or self.store.is_denied(m)
+            ]
+            done = await self.store.async_allow_many(macs)
+
+            async def work() -> None:
+                for mac in held:
+                    await self._safe_unblock(mac)
+
+            self._controller_job(held, work, "bulk allow")
+            word = "allowed"
+        elif action == "deny":
+            # The never-blocked few are left off the list, not just unblocked.
+            macs = [m for m in macs if m not in self._protected]
+            done = await self.store.async_deny_many(macs, source="panel")
+            targets = list(macs)
+
+            async def work() -> None:
+                for mac in targets:
+                    await self._safe_block(mac)
+
+            self._controller_job(targets, work, "bulk block")
+            word = "blocked"
+        elif action == "forget":
+            done = await self.store.async_forget_many(macs)
+            targets = list(macs)
+            self._controller_job(
+                targets, lambda: self._lift_blocks(targets), "bulk forget"
+            )
+            word = "forgot"
+        else:
+            raise ValueError(f"unknown bulk action {action!r}")
+
+        for mac in macs:
+            await self.store.async_close_id(mac)
+            await self.async_clear_notification(mac)
+        await self.async_record(word, "", f"{len(macs)} devices", actor)
+        _LOGGER.warning("%s %d device(s) in one go", word, len(macs))
+        await self.async_request_refresh()
+        return done
+
+    async def async_forget_blocked(
+        self,
+        dry_run: bool = True,
+        include_connected: bool = False,
+        actor: str = "",
+    ) -> dict:
+        """Forget every device on the Blocked list, here and on the controller.
+
+        Clean-up for a list that has grown to thousands of randomised addresses.
+        Each device's block is lifted on the controller too - forgotten there
+        when "Forget also removes the device from UniFi" is on, unblocked
+        otherwise - or the sync would adopt it straight back into Blocked.
+        Devices connected right now are left alone unless asked for: unblocked,
+        they would turn up as new on the next check, all at once.
+        """
+        live = {r["mac"] for r in self.online if r.get("live")}
+        denied = list(self.store.denied)
+        macs = [m for m in denied if include_connected or m not in live]
+        skipped = len(denied) - len(macs)
+        result = {
+            "forgotten": len(macs),
+            "left_connected": skipped,
+            "dry_run": dry_run,
+        }
+
+        if dry_run or not macs:
+            _LOGGER.warning(
+                "forget_blocked preview: would forget %d blocked device(s)%s",
+                len(macs),
+                f", leaving {skipped} that are connected now" if skipped else "",
+            )
+            await self._notify_plain(
+                "Blocked list clean-up preview",
+                f"Would forget {len(macs)} blocked device(s)"
+                + (f" and leave {skipped} connected one(s)" if skipped else "")
+                + ". Nothing changed.",
+                icon="mdi:broom",
+            )
+            return result
+
+        await self.store.async_forget_many(macs)
+        targets = list(macs)
+        self._controller_job(targets, lambda: self._lift_blocks(targets), "forget blocked")
+        for mac in macs:
+            await self.store.async_close_id(mac)
+
+        await self.async_record(
+            "forgot", "", f"{len(macs)} blocked device(s)", actor
+        )
+        _LOGGER.warning("forgot %d blocked device(s)", len(macs))
+        await self._notify_plain(
+            "Blocked list cleaned up",
+            f"Forgot {len(macs)} blocked device(s)"
+            + (f"; {skipped} connected one(s) left blocked" if skipped else "")
+            + ".",
+            icon="mdi:broom",
+        )
+        await self.async_request_refresh()
+        return result
 
     async def async_sync_from_unifi(
         self,
@@ -1609,6 +1761,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 continue
             # Never adopted, never re-blocked. See _guard_protected.
             if mac in self._protected:
+                continue
+            # A bulk job is still changing it on the controller.
+            if mac in self._in_flight:
                 continue
             if rec.get("blocked"):
                 on_controller.add(mac)

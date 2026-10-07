@@ -128,6 +128,8 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 | `unifi_allowlist.allow_online_unknown` | Approve every policed unknown device currently connected |
 | `unifi_allowlist.resend_pending` | Re-notify everything still waiting |
 | `unifi_allowlist.unblock_all` | Clear every block on the controller |
+| `unifi_allowlist.bulk_action` | Allow, block or forget a list of MACs in one call (what the panel's multi-select uses) |
+| `unifi_allowlist.forget_blocked` | Forget every blocked device, here and in UniFi (dry run first; connected ones left alone by default) |
 | `unifi_allowlist.prune` | Forget stale offline clients |
 | `unifi_allowlist.import_list` | Seed a list from a file |
 | `unifi_allowlist.export_list` | Write a list out as JSON |
@@ -187,6 +189,17 @@ Where a name is reported for more than one MAC, the last two octets are
 appended - `Tesla 45:cd`, `Tesla a2:fb` - the same way the UniFi UI does it, so
 the rows can still be told apart. Renaming a device in the panel overrides all
 of this.
+
+## Selecting several devices
+
+Long-press a card (right-click on a computer) to start selecting, then tap
+other cards to add them. The bar that replaces the tab bar shows how many are
+selected, a **Select all** for everything the tab currently shows (after any
+search or filter, including rows not scrolled into view yet), and the actions
+that make sense for the tab: Allow and Forget on Blocked, Block and Forget on
+Allowed. Every action asks for confirmation first and is sent as one call.
+Forgetting lifts each block in UniFi too, so nothing is adopted back. Back,
+Escape, ✕ or switching tabs stops selecting.
 
 ## Sorting and filtering
 
