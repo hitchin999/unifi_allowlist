@@ -20,6 +20,8 @@ const FIRST_ROWS = 14;
 const PAGE_ROWS = 24;
 
 const TABS = ["pending", "online", "allowed", "denied"];
+// How long a press has to be held to start selecting several devices.
+const LONG_PRESS_MS = 480;
 const HASH_PREFIX = "#ual-";
 // Longest the list may stay frozen for an animation before we force a render.
 const RENDER_HOLD_MAX = 4000;
@@ -571,6 +573,43 @@ const STYLES = `
   .bulk.quiet button { color: var(--ua-blue); border-color: var(--ua-line); }
   .bulk button.confirm { background: var(--ua-warn); color: #fff; border-color: transparent; }
   .bulk button:focus-visible { outline: 2px solid var(--ua-blue); outline-offset: 2px; }
+
+  /* ---------- multi-select ---------- */
+  .row { -webkit-touch-callout: none; }
+  .wrap.selecting .row { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  .wrap.selecting .row .side { display: none; }
+  .row.picked { border-color: var(--ua-blue); box-shadow: 0 0 0 1px var(--ua-blue) inset; }
+  .ava.pick { background: var(--ua-bg); color: var(--ua-dim); }
+  .row.picked .ava.pick { background: var(--ua-blue); color: #fff; }
+  .selbar {
+    position: absolute; z-index: 39;
+    left: 10px; right: 10px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    max-width: 640px; margin: 0 auto;
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--ua-glass-border); border-radius: 22px;
+    background: var(--ua-glass-bg); box-shadow: var(--ua-glass-shadow);
+    backdrop-filter: blur(24px) saturate(1.8);
+    -webkit-backdrop-filter: blur(24px) saturate(1.8);
+    color: var(--ua-text); font-size: 14px;
+  }
+  .selbar[hidden] { display: none; }
+  .selbar .sel-top { display: flex; align-items: center; gap: 10px; }
+  .selbar .sel-n { flex: 1 1 auto; font-weight: 700; }
+  .selbar button {
+    appearance: none; font: inherit; font-size: 13.5px; font-weight: 700;
+    padding: 9px 14px; border-radius: 12px; cursor: pointer;
+    border: 1px solid var(--ua-line); background: var(--ua-card); color: var(--ua-text);
+  }
+  .selbar button:disabled { opacity: .45; cursor: default; }
+  .selbar .link { border: 0; background: none; color: var(--ua-blue); padding: 6px 4px; }
+  .selbar .sel-acts { display: flex; gap: 8px; }
+  .selbar .sel-acts button { flex: 1 1 0; }
+  .selbar .ok { background: var(--ua-ok); border-color: transparent; color: #fff; }
+  .selbar .bad { background: var(--ua-bad); border-color: transparent; color: #fff; }
+  .selbar .sel-q { font-weight: 600; }
+  .wrap.selecting .tabs { visibility: hidden; }
 
   .row {
     display: flex; align-items: center; gap: 12px;
@@ -1311,6 +1350,9 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (this._confirmBulk && !(st.ual && st.kind === "confirm")) {
       this._confirmBulk = false;
     }
+    if (this._selecting && !(st.ual && st.kind === "select")) {
+      this._endSelect(true);
+    }
 
     if (st.ual && st.kind === "tab" && st.tab && st.tab !== this._tab) {
       this._tab = st.tab;
@@ -1864,6 +1906,7 @@ class UnifiAllowlistPanel extends HTMLElement {
           </div>
         </aside>
 
+        <div class="selbar" id="selbar" hidden></div>
         <div class="row-menu" id="row-menu"></div>
         <div class="toast" id="toast"></div>
       </div>
@@ -1972,6 +2015,10 @@ class UnifiAllowlistPanel extends HTMLElement {
     root.getElementById("banner").addEventListener("click", (ev) => {
       if (ev.target.closest && ev.target.closest(".b-go")) this._openRev(true);
     });
+    root.getElementById("selbar").addEventListener("click", (ev) => {
+      const b = ev.target.closest("button[data-sel]");
+      if (b && !b.disabled) this._onSel(b.dataset.sel);
+    });
     root.getElementById("rev-bd").addEventListener("click", () => this._openRev(false));
     root.getElementById("rev-x").addEventListener("click", () => this._openRev(false));
     root.getElementById("rev-go").addEventListener("click", () => this._applyRev());
@@ -1995,6 +2042,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     });
     window.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
+      if (this._selecting) this._endSelect();
       if (this._revOpen) this._openRev(false);
       if (this._sheetOpen) this._openSheet(false);
       if (this._histOpen) this._openHist(false);
@@ -2060,7 +2108,67 @@ class UnifiAllowlistPanel extends HTMLElement {
 
     const list = root.getElementById("list");
 
+    // Long press (or right click) on a card starts multi-select.
+    const cancelPress = () => {
+      if (this._lp) window.clearTimeout(this._lp.t);
+      this._lp = null;
+    };
+    list.addEventListener("pointerdown", (ev) => {
+      // A new press: any click left over from a long press (the browser may
+      // never send it, the row having been redrawn) must not eat this one.
+      this._swallowClick = false;
+      if (ev.button !== 0) return;
+      const row = ev.target.closest(".row");
+      if (!row || this._editing || ev.target.closest("input")) return;
+      cancelPress();
+      const mac = row.dataset.mac;
+      this._lp = {
+        x: ev.clientX,
+        y: ev.clientY,
+        t: window.setTimeout(() => {
+          this._lp = null;
+          this._swallowClick = true;
+          if (this._selecting) this._togglePick(mac);
+          else this._startSelect(mac);
+          try {
+            if (navigator.vibrate) navigator.vibrate(15);
+          } catch (e) {
+            /* no vibration */
+          }
+        }, LONG_PRESS_MS),
+      };
+    });
+    list.addEventListener("pointermove", (ev) => {
+      if (this._lp && Math.hypot(ev.clientX - this._lp.x, ev.clientY - this._lp.y) > 10) {
+        cancelPress();
+      }
+    });
+    for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+      list.addEventListener(type, cancelPress);
+    }
+    list.addEventListener("contextmenu", (ev) => {
+      const row = ev.target.closest(".row");
+      if (!row) return;
+      ev.preventDefault();
+      if (!this._selecting) this._startSelect(row.dataset.mac);
+    });
+
     list.addEventListener("click", (ev) => {
+      if (this._swallowClick) {
+        // The click that ends a long press is not a tap.
+        this._swallowClick = false;
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      if (this._selecting) {
+        const row = ev.target.closest(".row");
+        if (row) {
+          ev.preventDefault();
+          this._togglePick(row.dataset.mac);
+        }
+        return;
+      }
       const copy = ev.target.closest("button[data-copy]");
       if (copy) {
         this._copy(copy.dataset.copy, copy);
@@ -2098,6 +2206,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (!TABS.includes(tab) || tab === this._tab) return;
     this._tab = tab;
     this._confirmBulk = false;
+    if (this._selecting) this._endSelect(true);
     this._resetPaging();
 
     // Mark the tab and empty the list, then hand control back to the browser
@@ -3122,6 +3231,134 @@ class UnifiAllowlistPanel extends HTMLElement {
     }
   }
 
+  /* ---- multi-select ---- */
+
+  _startSelect(mac) {
+    this._selecting = true;
+    this._picked = new Set(mac ? [mac] : []);
+    this._selAsk = null;
+    this.shadowRoot.querySelector(".wrap").classList.add("selecting");
+    this._pushOverlayHist("select");
+    this._renderList();
+  }
+
+  _endSelect(fromNav) {
+    if (!this._selecting) return;
+    this._selecting = false;
+    this._picked = new Set();
+    this._selAsk = null;
+    this.shadowRoot.querySelector(".wrap").classList.remove("selecting");
+    if (!fromNav) this._popOverlayHist("select");
+    this._renderList();
+  }
+
+  _togglePick(mac) {
+    if (!mac) return;
+    if (this._picked.has(mac)) this._picked.delete(mac);
+    else this._picked.add(mac);
+    this._selAsk = null;
+    this._renderList();
+  }
+
+  // Everything the current tab shows, after filters and search - not just the
+  // rows drawn so far.
+  _selectable() {
+    return this._pageRows || [];
+  }
+
+  _onSel(what) {
+    const rows = this._selectable();
+    if (what === "cancel") return this._endSelect();
+    if (what === "all") {
+      this._picked = new Set(rows.map((r) => r.mac));
+      this._selAsk = null;
+      return this._renderList();
+    }
+    if (what === "none") {
+      this._picked = new Set();
+      this._selAsk = null;
+      return this._renderList();
+    }
+    if (what === "no") {
+      this._selAsk = null;
+      return this._renderSel();
+    }
+    if (what === "yes") return this._applySel(this._selAsk);
+    // An action: confirm first, it can touch hundreds of devices.
+    this._selAsk = what;
+    this._renderSel();
+  }
+
+  async _applySel(action) {
+    const macs = Array.from(this._picked);
+    if (!action || !macs.length) return;
+    this._selBusy = true;
+    this._renderSel();
+    const ok = await this._call("bulk_action", { action, macs });
+    this._selBusy = false;
+    if (ok) {
+      const word = { allow: "Allowed", deny: "Blocked", forget: "Forgot" }[action];
+      this._notify(`${word} ${macs.length} device${macs.length === 1 ? "" : "s"}`, "ok");
+      this._endSelect();
+    } else {
+      this._selAsk = null;
+      this._renderSel();
+    }
+  }
+
+  _renderSel() {
+    const bar = this.shadowRoot && this.shadowRoot.getElementById("selbar");
+    if (!bar) return;
+    if (!this._selecting) {
+      bar.hidden = true;
+      bar.innerHTML = "";
+      return;
+    }
+    // Rows that left the list (filtered away, or gone after a refresh) drop
+    // out of the selection, so an action never touches something unseen.
+    const rows = this._selectable();
+    const visible = new Set(rows.map((r) => r.mac));
+    for (const mac of Array.from(this._picked)) {
+      if (!visible.has(mac)) this._picked.delete(mac);
+    }
+    const n = this._picked.size;
+    const all = rows.length > 0 && n === rows.length;
+    const show = this._buttonsFor(this._tab === "online" ? "unknown" : "");
+    const busy = this._selBusy ? "disabled" : "";
+    const none = !n ? "disabled" : "";
+    const fmt = (x) => Number(x).toLocaleString();
+    const label = { allow: "Allow", deny: "Block", forget: "Forget" };
+
+    let acts;
+    if (this._selAsk) {
+      const a = this._selAsk;
+      acts =
+        `<div class="sel-q">${label[a]} ${fmt(n)} device${n === 1 ? "" : "s"}?` +
+        (a === "forget" ? " Their blocks are lifted in UniFi too." : "") +
+        `</div><div class="sel-acts">` +
+        `<button data-sel="no" ${busy}>Cancel</button>` +
+        `<button class="${a === "allow" ? "ok" : "bad"}" data-sel="yes" ${busy}>${
+          this._selBusy ? "Working…" : `Yes, ${label[a].toLowerCase()} ${fmt(n)}`
+        }</button></div>`;
+    } else {
+      acts =
+        `<div class="sel-acts">` +
+        (show.allow ? `<button class="ok" data-sel="allow" ${none}>Allow</button>` : "") +
+        (show.deny ? `<button class="bad" data-sel="deny" ${none}>Block</button>` : "") +
+        (show.forget ? `<button data-sel="forget" ${none}>Forget</button>` : "") +
+        `</div>`;
+    }
+    bar.innerHTML =
+      `<div class="sel-top">` +
+      `<button class="link" data-sel="cancel" aria-label="Stop selecting">✕</button>` +
+      `<span class="sel-n">${fmt(n)} selected</span>` +
+      `<button class="link" data-sel="${all ? "none" : "all"}">${
+        all ? "Select none" : `Select all ${fmt(rows.length)}`
+      }</button></div>` +
+      acts;
+    bar.hidden = false;
+  }
+
   /* ---- review: finish setup, or sort out a tripped brake ---- */
 
   _revRows() {
@@ -3470,6 +3707,8 @@ class UnifiAllowlistPanel extends HTMLElement {
     if (this._revOpen) this._renderRev();
 
     if (!rows.length) {
+      this._pageRows = [];
+      this._renderSel();
       list.innerHTML =
         this._bulkHtml(rows) +
         `<div class="empty"><ha-icon icon="${this._emptyIcon()}"></ha-icon>` +
@@ -3483,6 +3722,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     this._page = Math.min(Math.max(this._page || FIRST_ROWS, FIRST_ROWS), cap);
     const shown = rows.slice(0, this._page);
     this._pageRows = rows;
+    this._renderSel();
 
     list.innerHTML =
       this._bulkHtml(rows) +
@@ -3550,7 +3790,7 @@ class UnifiAllowlistPanel extends HTMLElement {
   }
 
   _bulkHtml(rows) {
-    if (this._query) return "";
+    if (this._query || this._selecting) return "";
 
     let n = 0;
     let text = "";
@@ -3673,12 +3913,19 @@ class UnifiAllowlistPanel extends HTMLElement {
       (show.deny ? btn("deny", "deny", "mdi:cancel", "Block") : "") +
       (show.forget ? btn("forget", "forget", "mdi:delete-outline", "Forget") : "");
 
-    return `
-      <div class="row" data-mac="${r.mac}">
-        <span class="ava ${r.status}">
+    const picked = this._selecting && this._picked.has(r.mac);
+    const ava = this._selecting
+      ? `<span class="ava pick"><ha-icon icon="${
+          picked ? "mdi:check-circle" : "mdi:checkbox-blank-circle-outline"
+        }"></ha-icon></span>`
+      : `<span class="ava ${r.status}">
           <ha-icon icon="${UnifiAllowlistPanel._deviceIcon(r.name || r.mac)}"></ha-icon>
           <span class="dot ${r.status}"></span>
-        </span>
+        </span>`;
+    return `
+      <div class="row${picked ? " picked" : ""}" data-mac="${r.mac}"
+           ${this._selecting ? `role="checkbox" aria-checked="${picked}"` : ""}>
+        ${ava}
         <div class="meta">
           ${name}
           ${chips}

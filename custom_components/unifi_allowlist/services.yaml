@@ -375,3 +375,36 @@ forget_blocked:
       selector:
         config_entry:
           integration: unifi_allowlist
+
+bulk_action:
+  name: Allow, block or forget several devices
+  description: >-
+    What the panel's multi-select uses: apply one action to a list of MAC
+    addresses in a single call. Forget also lifts the block in UniFi, so the
+    sync does not pull the device back into Blocked.
+  fields:
+    action:
+      name: Action
+      required: true
+      selector:
+        select:
+          options:
+            - allow
+            - deny
+            - forget
+    macs:
+      name: MAC addresses
+      required: true
+      example: '["a4:83:e7:12:34:56", "de:ad:be:ef:00:01"]'
+      selector:
+        text:
+          multiple: true
+    site:
+      name: Site
+      description: >-
+        Which UniFi site to act on. Only needed when more than one site is set
+        up; with a single site it is used automatically.
+      required: false
+      selector:
+        config_entry:
+          integration: unifi_allowlist

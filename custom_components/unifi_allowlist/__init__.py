@@ -71,6 +71,9 @@ from .const import (
     SERVICE_FORGET,
     SERVICE_FORGET_OFFLINE,
     SERVICE_FORGET_BLOCKED,
+    SERVICE_BULK,
+    ATTR_ACTION,
+    ATTR_MACS,
     ATTR_INCLUDE_CONNECTED,
     SERVICE_SYNC,
     SERVICE_ACCEPT_LIST_SIZE,
@@ -121,6 +124,13 @@ REVIEW_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_TRUST, default=[]): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional(ATTR_BLOCK, default=[]): vol.All(cv.ensure_list, [cv.string]),
+        **SITE_FIELD,
+    }
+)
+BULK_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ACTION): vol.In(["allow", "deny", "forget"]),
+        vol.Required(ATTR_MACS): vol.All(cv.ensure_list, [cv.string]),
         **SITE_FIELD,
     }
 )
@@ -467,6 +477,16 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_FORGET_BLOCKED, _forget_blocked, schema=FORGET_BLOCKED_SCHEMA
     )
+
+    async def _bulk(call):
+        if coord := _target(hass, call):
+            await coord.async_bulk(
+                call.data[ATTR_ACTION],
+                call.data[ATTR_MACS],
+                actor=await _actor(hass, call),
+            )
+
+    hass.services.async_register(DOMAIN, SERVICE_BULK, _bulk, schema=BULK_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
     hass.services.async_register(
         DOMAIN, SERVICE_UNBLOCK_UNTRACKED, _unblock_untracked, schema=SITE_SCHEMA

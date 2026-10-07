@@ -1537,8 +1537,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_record("forgot", mac, name, actor)
         # "As if never seen" has to include the controller, or our lists and
         # UniFi drift apart and a later sync adopts it straight back.
-        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
-            await self._async_remove_from_controller([mac])
+        await self._lift_blocks([mac])
         # Pull any outstanding prompt for it off every phone.
         await self.async_clear_notification(mac)
         await self.async_request_refresh()
@@ -1563,6 +1562,61 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
         _LOGGER.info("forgot %d offline waiting device(s)", gone)
         return gone
+
+    async def _lift_blocks(self, macs: list[str]) -> None:
+        """After forgetting, make sure UniFi is not still holding a block.
+
+        Forgotten there when "Forget also removes the device from UniFi" is on
+        (in batches, and only unblocked for clients with an alias or a fixed
+        IP), unblocked otherwise. A block left behind would be adopted straight
+        back into Blocked by the next sync.
+        """
+        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
+            await self._async_remove_from_controller(macs)
+        else:
+            for mac in macs:
+                await self._safe_unblock(mac)
+
+    async def async_bulk(self, action: str, macs: list[str], actor: str = "") -> int:
+        """Allow, block or forget many devices in one go, for the panel.
+
+        One storage write and one history line instead of hundreds, and the
+        same rules as the single actions: blocks go through the protection
+        gate, forgetting lifts the block in UniFi.
+        """
+        macs = [m for m in dict.fromkeys(_norm_mac(m) for m in macs or []) if m]
+        if not macs:
+            return 0
+
+        if action == "allow":
+            held = [
+                m for m in macs if self.store.is_pending(m) or self.store.is_denied(m)
+            ]
+            done = await self.store.async_allow_many(macs)
+            for mac in held:
+                await self._safe_unblock(mac)
+            word = "allowed"
+        elif action == "deny":
+            # The never-blocked few are left off the list, not just unblocked.
+            macs = [m for m in macs if m not in self._protected]
+            done = await self.store.async_deny_many(macs, source="panel")
+            for mac in macs:
+                await self._safe_block(mac)
+            word = "blocked"
+        elif action == "forget":
+            done = await self.store.async_forget_many(macs)
+            await self._lift_blocks(macs)
+            word = "forgot"
+        else:
+            raise ValueError(f"unknown bulk action {action!r}")
+
+        for mac in macs:
+            await self.store.async_close_id(mac)
+            await self.async_clear_notification(mac)
+        await self.async_record(word, "", f"{len(macs)} devices", actor)
+        _LOGGER.warning("%s %d device(s) in one go", word, len(macs))
+        await self.async_request_refresh()
+        return done
 
     async def async_forget_blocked(
         self,
@@ -1605,13 +1659,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return result
 
         await self.store.async_forget_many(macs)
-        if bool(self._opt(CONF_FORGET_IN_UNIFI, DEFAULT_FORGET_IN_UNIFI)):
-            # Forgets in batches, and only unblocks clients with an alias or a
-            # fixed IP, so nothing set up in UniFi is wiped.
-            await self._async_remove_from_controller(macs)
-        else:
-            for mac in macs:
-                await self._safe_unblock(mac)
+        await self._lift_blocks(macs)
         for mac in macs:
             await self.store.async_close_id(mac)
 
