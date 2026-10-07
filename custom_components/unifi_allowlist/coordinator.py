@@ -1298,12 +1298,30 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             await self.client.block(mac)
         except UnifiError as err:
             _LOGGER.warning("block failed for %s: %s", mac, err)
+        else:
+            self._mark_cached(mac, True)
 
     async def _safe_unblock(self, mac: str) -> None:
         try:
             await self.client.unblock(mac)
         except UnifiError as err:
             _LOGGER.warning("unblock failed for %s: %s", mac, err)
+        else:
+            self._mark_cached(mac, False)
+
+    def _mark_cached(self, mac: str, blocked: bool) -> None:
+        """Keep the cached client list in step with what we just did.
+
+        The sync reads that list, which is refreshed only once a minute. Left
+        stale, a device just allowed still looked blocked: the sync unblocked
+        it again and said so, and after three checks took it for a block made
+        by hand in UniFi and moved it to Blocked.
+        """
+        mac = _norm_mac(mac)
+        for rec in self._known_cache or []:
+            if _norm_mac(rec.get("mac")) == mac:
+                rec["blocked"] = blocked
+                break
 
     # --- notifications -----------------------------------------------------
 
