@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import hashlib
 import os
@@ -241,6 +242,15 @@ async def _async_asset_hash(hass: HomeAssistant) -> str:
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Serve the panel JS and put an item in the sidebar. Idempotent."""
+    # Several sites set up at once: without the lock each one passed the check
+    # below during the awaits, and all but the first failed to register the
+    # sidebar path the first had just taken.
+    lock = hass.data.setdefault(f"{DOMAIN}_panel_lock", asyncio.Lock())
+    async with lock:
+        await _async_register_frontend_locked(hass)
+
+
+async def _async_register_frontend_locked(hass: HomeAssistant) -> None:
     if hass.data.get(f"{DOMAIN}_panel"):
         return
 

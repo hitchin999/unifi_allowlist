@@ -212,6 +212,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         # MAC -> why it is never blocked. Rebuilt every poll; every block goes
         # through _safe_block, which refuses anything in here.
         self._protected: dict[str, str] = {}
+        # MACs whose block or unblock is still being sent to the controller by
+        # a bulk job. The sync leaves them alone until it finishes, or it would
+        # see "blocked there, not ours" mid-job and adopt them straight back.
+        self._in_flight: set[str] = set()
         self._spared_logged: set[str] = set()
 
         super().__init__(
@@ -1577,6 +1581,28 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             for mac in macs:
                 await self._safe_unblock(mac)
 
+    def _controller_job(self, macs: list[str], work, label: str) -> None:
+        """Send a slow batch of controller changes in the background.
+
+        The lists are already updated when this starts, so the service call
+        returns at once instead of after minutes of controller calls. Until the
+        job ends its MACs are in _in_flight, which the sync skips.
+        """
+        macs = list(macs)
+        self._in_flight.update(macs)
+
+        async def _run() -> None:
+            try:
+                await work()
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("%s: controller job failed", label)
+            finally:
+                self._in_flight.difference_update(macs)
+                _LOGGER.info("%s: controller job finished for %d device(s)", label, len(macs))
+                await self.async_request_refresh()
+
+        self.hass.async_create_task(_run(), name=f"{DOMAIN} {label}")
+
     async def async_bulk(self, action: str, macs: list[str], actor: str = "") -> int:
         """Allow, block or forget many devices in one go, for the panel.
 
@@ -1593,19 +1619,31 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 m for m in macs if self.store.is_pending(m) or self.store.is_denied(m)
             ]
             done = await self.store.async_allow_many(macs)
-            for mac in held:
-                await self._safe_unblock(mac)
+
+            async def work() -> None:
+                for mac in held:
+                    await self._safe_unblock(mac)
+
+            self._controller_job(held, work, "bulk allow")
             word = "allowed"
         elif action == "deny":
             # The never-blocked few are left off the list, not just unblocked.
             macs = [m for m in macs if m not in self._protected]
             done = await self.store.async_deny_many(macs, source="panel")
-            for mac in macs:
-                await self._safe_block(mac)
+            targets = list(macs)
+
+            async def work() -> None:
+                for mac in targets:
+                    await self._safe_block(mac)
+
+            self._controller_job(targets, work, "bulk block")
             word = "blocked"
         elif action == "forget":
             done = await self.store.async_forget_many(macs)
-            await self._lift_blocks(macs)
+            targets = list(macs)
+            self._controller_job(
+                targets, lambda: self._lift_blocks(targets), "bulk forget"
+            )
             word = "forgot"
         else:
             raise ValueError(f"unknown bulk action {action!r}")
@@ -1659,7 +1697,8 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             return result
 
         await self.store.async_forget_many(macs)
-        await self._lift_blocks(macs)
+        targets = list(macs)
+        self._controller_job(targets, lambda: self._lift_blocks(targets), "forget blocked")
         for mac in macs:
             await self.store.async_close_id(mac)
 
@@ -1722,6 +1761,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 continue
             # Never adopted, never re-blocked. See _guard_protected.
             if mac in self._protected:
+                continue
+            # A bulk job is still changing it on the controller.
+            if mac in self._in_flight:
                 continue
             if rec.get("blocked"):
                 on_controller.add(mac)
