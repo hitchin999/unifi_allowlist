@@ -76,11 +76,13 @@ You can also import a list you already have:
 ```yaml
 action: unifi_allowlist.import_list
 data:
-  path: /config/known_macs.json
+  path: /config/unifi_allowlist/known_macs.json
   target: allowed
 ```
 
-The importer accepts a JSON array, a JSON object keyed by MAC, or plain text with one MAC per line.
+The importer accepts a JSON array, a JSON object keyed by MAC, or plain text with one MAC per line. Only real MAC addresses are taken from the file; anything else on a line is ignored.
+
+`import_list` and `export_list` only read and write files inside `/config/unifi_allowlist/` (created on first export), or in a folder listed under [`allowlist_external_dirs`](https://www.home-assistant.io/integrations/homeassistant/#allowlist_external_dirs). Any other path, such as `configuration.yaml`, is refused.
 
 ---
 
@@ -117,6 +119,8 @@ The importer accepts a JSON array, a JSON object keyed by MAC, or plain text wit
 ---
 
 ## Services
+
+Everything except `allow`, `deny`, `forget`, `set_name` and `resend_pending` is an **admin-only** action: a non-admin user calling it gets a permission error. Every MAC passed to a service is checked and normalised (`aa:bb:cc:dd:ee:ff`; dashes, dots or no separators are fine), and anything that is not a MAC address is rejected. The panel and its API are admin-only too.
 
 | Service | What it does |
 |---|---|
@@ -344,6 +348,7 @@ reconciles both:
   blocked are already in the waiting or denied lists and are skipped, so a
   pending approval is never quietly reversed.
 - **denied here, not blocked there** -> blocked again.
+- **allowed here, blocked there** -> left alone, because the block may be an admin's. If it is still there after three separate reads of the client list (about three minutes), it is moved to Denied like any other block made in UniFi.
 
 Nothing is ever unblocked; removing enforcement stays a manual decision.
 

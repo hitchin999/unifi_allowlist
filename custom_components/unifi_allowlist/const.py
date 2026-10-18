@@ -72,9 +72,9 @@ EVENT_DECISION = "unifi_allowlist_decision"
 # Refuse a runaway adoption; a first sync with many manual blocks should go
 # through the service, where it can be previewed.
 ADOPT_LIMIT = 25
-# An allowed device showing as blocked is usually our own unblock not having
-# landed yet. Only after this many consecutive polls is it treated as somebody
-# deliberately blocking it in the UniFi UI.
+# An allowed device found blocked on the controller is left alone, and only
+# treated as somebody deliberately blocking it in the UniFi UI - adopted into
+# Blocked - once seen blocked in this many separate reads of the client list.
 ADOPT_ALLOWED_AFTER = 3
 DEFAULT_MAX_PER_RUN = 10
 # Off by default. The absolute floor is a poor fit for a five-device house and

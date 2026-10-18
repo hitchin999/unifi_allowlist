@@ -6,6 +6,7 @@ import asyncio
 import logging
 import hashlib
 import os
+from http import HTTPStatus
 
 import voluptuous as vol
 
@@ -16,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.loader import async_get_integration
 
 from .api import UnifiClient
@@ -88,7 +90,7 @@ from .const import (
 )
 from .coordinator import UnifiAllowlistCoordinator
 from . import sms as sms_bridge
-from .store import DeviceStore
+from .store import DeviceStore, normalize_mac
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,7 +98,18 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 SITE_FIELD = {vol.Optional(ATTR_SITE): cv.string}
 
-MAC_SCHEMA = vol.Schema({vol.Required(ATTR_MAC): cv.string, **SITE_FIELD})
+
+def _mac(value) -> str:
+    """Schema validator: a MAC address, normalised to aa:bb:cc:dd:ee:ff."""
+    mac = normalize_mac(value)
+    if not mac:
+        raise vol.Invalid(f"not a MAC address: {str(value)[:40]!r}")
+    return mac
+
+
+MAC_LIST = vol.All(cv.ensure_list, [_mac])
+
+MAC_SCHEMA = vol.Schema({vol.Required(ATTR_MAC): _mac, **SITE_FIELD})
 SITE_SCHEMA = vol.Schema(SITE_FIELD)
 SYNC_SCHEMA = vol.Schema(
     {
@@ -116,22 +129,22 @@ FILE_SCHEMA = vol.Schema(
 )
 NAME_SCHEMA = vol.Schema(
     {
-        vol.Required(ATTR_MAC): cv.string,
+        vol.Required(ATTR_MAC): _mac,
         **SITE_FIELD,
         vol.Optional(ATTR_NAME, default=""): cv.string,
     }
 )
 REVIEW_SCHEMA = vol.Schema(
     {
-        vol.Optional(ATTR_TRUST, default=[]): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional(ATTR_BLOCK, default=[]): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional(ATTR_TRUST, default=[]): MAC_LIST,
+        vol.Optional(ATTR_BLOCK, default=[]): MAC_LIST,
         **SITE_FIELD,
     }
 )
 BULK_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_ACTION): vol.In(["allow", "deny", "forget"]),
-        vol.Required(ATTR_MACS): vol.All(cv.ensure_list, [cv.string]),
+        vol.Required(ATTR_MACS): MAC_LIST,
         **SITE_FIELD,
     }
 )
@@ -397,6 +410,30 @@ def _target(hass: HomeAssistant, call) -> UnifiAllowlistCoordinator | None:
     )
 
 
+# Files import_list and export_list may touch without any further setup. Kept
+# separate from the rest of /config, so neither service can reach
+# configuration.yaml, secrets.yaml or anything else Home Assistant can write.
+FILE_DIR = "unifi_allowlist"
+
+
+def _checked_path(hass: HomeAssistant, path: str) -> str:
+    """The real path, if import/export may use it. Raises otherwise.
+
+    Allowed: anything under allowlist_external_dirs (Home Assistant's own
+    check), or inside /config/unifi_allowlist/. Symlinks and ".." are resolved
+    first, so neither can step outside.
+    """
+    real = os.path.realpath(str(path or ""))
+    own = os.path.realpath(hass.config.path(FILE_DIR))
+    if real == own or not real.startswith(own + os.sep):
+        if not hass.config.is_allowed_path(real):
+            raise ServiceValidationError(
+                f"{path} is not an allowed location. Use a file inside "
+                f"{own}{os.sep}, or a folder listed under allowlist_external_dirs."
+            )
+    return real
+
+
 def _async_register_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, SERVICE_ALLOW):
         return
@@ -464,8 +501,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 actor=await _actor(hass, call),
             )
 
-    hass.services.async_register(
-        DOMAIN, SERVICE_APPLY_REVIEW, _apply_review, schema=REVIEW_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_APPLY_REVIEW, _apply_review, schema=REVIEW_SCHEMA
     )
 
     async def _forget_offline(call):
@@ -473,8 +510,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
             await coord.async_forget_offline_pending()
 
     hass.services.async_register(DOMAIN, SERVICE_RESEND, _resend, schema=SITE_SCHEMA)
-    hass.services.async_register(DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online, schema=SITE_SCHEMA)
-    hass.services.async_register(DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline, schema=SITE_SCHEMA)
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_ALLOW_ONLINE, _allow_online, schema=SITE_SCHEMA)
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_FORGET_OFFLINE, _forget_offline, schema=SITE_SCHEMA)
 
     async def _forget_blocked(call):
         if coord := _target(hass, call):
@@ -484,8 +523,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 actor=await _actor(hass, call),
             )
 
-    hass.services.async_register(
-        DOMAIN, SERVICE_FORGET_BLOCKED, _forget_blocked, schema=FORGET_BLOCKED_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_FORGET_BLOCKED, _forget_blocked, schema=FORGET_BLOCKED_SCHEMA
     )
 
     async def _bulk(call):
@@ -496,37 +535,41 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 actor=await _actor(hass, call),
             )
 
-    hass.services.async_register(DOMAIN, SERVICE_BULK, _bulk, schema=BULK_SCHEMA)
-    hass.services.async_register(DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
-    hass.services.async_register(
-        DOMAIN, SERVICE_UNBLOCK_UNTRACKED, _unblock_untracked, schema=SITE_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_BULK, _bulk, schema=BULK_SCHEMA)
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_SYNC, _sync, schema=SYNC_SCHEMA)
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_UNBLOCK_UNTRACKED, _unblock_untracked, schema=SITE_SCHEMA
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_ACCEPT_LIST_SIZE, _accept_list_size, schema=SITE_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_ACCEPT_LIST_SIZE, _accept_list_size, schema=SITE_SCHEMA
     )
     hass.services.async_register(
         DOMAIN, SERVICE_SET_NAME, _set_name, schema=NAME_SCHEMA
     )
-    hass.services.async_register(DOMAIN, SERVICE_UNBLOCK_ALL, _unblock_all, schema=SITE_SCHEMA)
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_UNBLOCK_ALL, _unblock_all, schema=SITE_SCHEMA)
     async def _import_list(call):
         if coord := _target(hass, call):
             await coord.store.async_import_file(
-                hass, call.data[ATTR_PATH], call.data[ATTR_TARGET]
+                hass, _checked_path(hass, call.data[ATTR_PATH]), call.data[ATTR_TARGET]
             )
             await coord.async_request_refresh()
 
     async def _export_list(call):
         if coord := _target(hass, call):
             await coord.store.async_export_file(
-                hass, call.data[ATTR_PATH], call.data[ATTR_TARGET]
+                hass, _checked_path(hass, call.data[ATTR_PATH]), call.data[ATTR_TARGET]
             )
 
-    hass.services.async_register(DOMAIN, SERVICE_PRUNE, _prune, schema=PRUNE_SCHEMA)
-    hass.services.async_register(
-        DOMAIN, SERVICE_IMPORT_LIST, _import_list, schema=FILE_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_PRUNE, _prune, schema=PRUNE_SCHEMA)
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_IMPORT_LIST, _import_list, schema=FILE_SCHEMA
     )
-    hass.services.async_register(
-        DOMAIN, SERVICE_EXPORT_LIST, _export_list, schema=FILE_SCHEMA
+    async_register_admin_service(
+        hass, DOMAIN, SERVICE_EXPORT_LIST, _export_list, schema=FILE_SCHEMA
     )
 
 
@@ -581,6 +624,12 @@ def _async_register_action_listener(hass: HomeAssistant, entry: ConfigEntry) -> 
     entry.async_on_unload(hass.bus.async_listen(EVENT_ACTION, _handle))
 
 
+def _is_admin(request) -> bool:
+    """The panel is admin only, so its API is too."""
+    user = request.get("hass_user")
+    return bool(user and user.is_admin)
+
+
 class UnifiAllowlistOptionsView(HomeAssistantView):
     """Change the handful of options that belong next to the list.
 
@@ -611,6 +660,8 @@ class UnifiAllowlistOptionsView(HomeAssistantView):
         self.hass = hass
 
     async def post(self, request):
+        if not _is_admin(request):
+            return self.json_message("Admin access required", HTTPStatus.UNAUTHORIZED)
         try:
             body = await request.json()
         except ValueError:
@@ -669,6 +720,8 @@ class UnifiAllowlistDataView(HomeAssistantView):
         self.hass = hass
 
     async def get(self, request):
+        if not _is_admin(request):
+            return self.json_message("Admin access required", HTTPStatus.UNAUTHORIZED)
         coords = _all_coordinators(self.hass)
         if not coords:
             return self.json({"error": "not set up"}, status_code=404)

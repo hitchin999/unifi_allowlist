@@ -198,6 +198,9 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self._notify_missing_since = 0.0
         self._notify_missing_logged = False
         self._blocked_streak: dict[str, int] = {}
+        # Which client list the streaks last counted, so several checks
+        # reading the same cached copy count as one sighting, not several.
+        self._streak_stamp: float | None = None
         # The poll already pulls the full client list; keep it so a single
         # Forget does not have to fetch a thousand records again before it can
         # decide whether the client has an alias or a fixed IP.
@@ -1742,6 +1745,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         refresh: bool = True,
         adopt_blocks: bool = True,
         known: list[dict] | None = None,
+        known_at: float | None = None,
     ) -> dict:
         """Reconcile our lists against what the controller actually enforces.
 
@@ -1755,6 +1759,10 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         reblock - denied here but not blocked there. Our denial was quietly
                   reversed; put it back.
 
+        An allowed device found blocked there is left alone - its block may be
+        an admin's - and adopted once it has been seen blocked in
+        ADOPT_ALLOWED_AFTER separate reads of the client list.
+
         Nothing is unblocked. Removing enforcement is never done implicitly.
         """
         # The poll passes its own copy, refreshed once a minute; fetching the
@@ -1766,6 +1774,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             except UnifiError as err:
                 _LOGGER.error("sync failed: %s", err)
                 return {"error": str(err), "adopted": 0, "reblocked": 0}
+            known_at = time.time()
 
         names: dict[str, str] = {}
         on_controller: set[str] = set()
@@ -1790,17 +1799,20 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         ours = set(self.store.denied) | set(self.store.pending)
         allowed_now = set(self.store.allowed)
 
-        # An allowed device sitting blocked on the controller is ambiguous: it
-        # is either an admin blocking it by hand, or our own unblock not having
-        # taken effect yet. Those look identical in one snapshot, so the allow
-        # decision wins immediately and adoption needs the block to persist.
+        # An allowed device sitting blocked on the controller is ambiguous: an
+        # admin blocking it by hand, or our own unblock not having landed yet.
+        # It is never unblocked here - that would undo the admin's block every
+        # check - and it is only adopted once the block has been seen in
+        # ADOPT_ALLOWED_AFTER separate reads of the client list. Checks reading
+        # the same cached copy count once, so a stale copy cannot add up.
         held = sorted(allowed_now & on_controller)
+        fresh = known_at is None or known_at != self._streak_stamp
+        bump = 1 if fresh else 0
         persistent = [
             m
             for m in held
-            if self._blocked_streak.get(m, 0) + 1 >= ADOPT_ALLOWED_AFTER
+            if self._blocked_streak.get(m, 0) + bump >= ADOPT_ALLOWED_AFTER
         ]
-        restore = [m for m in held if m not in persistent]
 
         adopt = sorted(on_controller - ours - allowed_now) if adopt_blocks else []
         if adopt_blocks and persistent:
@@ -1813,7 +1825,6 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         result = {
             "adopted": len(adopt),
             "from_allowed": len(persistent) if adopt_blocks else 0,
-            "restored": len(restore),
             "reblocked": len(drifted) if reblock else 0,
             "dry_run": dry_run,
             "macs": adopt[:50],
@@ -1832,32 +1843,23 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         if dry_run:
             _LOGGER.warning(
                 "sync preview: would deny %d device(s) blocked in UniFi "
-                "(%d of them allowed here and blocked for %d+ polls), unblock "
-                "%d allowed device(s), and re-block %d device(s) held blocked "
-                "here but free there",
+                "(%d of them allowed here and seen blocked in %d+ reads), and "
+                "re-block %d device(s) held blocked here but free there",
                 len(adopt),
                 result["from_allowed"],
                 ADOPT_ALLOWED_AFTER,
-                len(restore),
                 len(drifted) if reblock else 0,
             )
             return result
 
-        # Streaks only advance on a real run, so previews never influence them.
-        for mac in held:
-            self._blocked_streak[mac] = self._blocked_streak.get(mac, 0) + 1
-        for mac in list(self._blocked_streak):
-            if mac not in on_controller:
-                del self._blocked_streak[mac]
-
-        # Put access back for allowed devices whose block has not persisted.
-        for mac in restore:
-            await self._safe_unblock(mac)
-        if restore:
-            _LOGGER.info(
-                "sync: restored access for %d allowed device(s) found blocked",
-                len(restore),
-            )
+        # Streaks only advance on a real run, and once per read of the list.
+        if fresh:
+            self._streak_stamp = known_at
+            for mac in held:
+                self._blocked_streak[mac] = self._blocked_streak.get(mac, 0) + 1
+            for mac in list(self._blocked_streak):
+                if mac not in held:
+                    del self._blocked_streak[mac]
         for mac in persistent:
             self._blocked_streak.pop(mac, None)
 
@@ -1865,7 +1867,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             await self.store.async_deny_many(adopt, source="unifi")
             _LOGGER.warning(
                 "sync: adopted %d block(s) from UniFi (%s), %d of which were "
-                "allowed here and had stayed blocked for %d consecutive polls",
+                "allowed here and seen blocked in %d separate reads",
                 len(adopt),
                 ", ".join(adopt[:10]) + ("..." if len(adopt) > 10 else ""),
                 len(persistent),
@@ -1877,20 +1879,24 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
                 await self._safe_block(mac)
             _LOGGER.warning("sync: re-blocked %d denied device(s)", len(drifted))
 
-        if adopt or restore or (reblock and drifted):
+        if adopt or (reblock and drifted):
             if refresh:
                 await self.async_request_refresh()
 
         # Adopting a block somebody else made is routine housekeeping and does
         # not need a push every time. Anything that touched the allow list, or
         # put a block back, is worth interrupting for.
-        notable = bool(restore) or bool(persistent) or bool(reblock and drifted)
+        notable = bool(persistent) or bool(reblock and drifted)
         if notable:
             await self._notify_plain(
                 "UniFi Allow List",
-                f"Synced with UniFi: {len(adopt)} newly denied, "
-                f"{len(drifted) if reblock else 0} re-blocked, "
-                f"{len(restore)} allowed device(s) unblocked again",
+                f"Synced with UniFi: {len(adopt)} newly denied"
+                + (
+                    f" ({len(persistent)} allowed here but blocked in UniFi)"
+                    if persistent
+                    else ""
+                )
+                + f", {len(drifted) if reblock else 0} re-blocked",
                 icon="mdi:sync",
             )
         return result
@@ -1906,6 +1912,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             refresh=False,
             adopt_blocks=bool(self._opt(CONF_ADOPT_BLOCKS, DEFAULT_ADOPT_BLOCKS)),
             known=known,
+            known_at=self._known_cache_at,
         )
 
     async def async_accept_list_size(self) -> int:
