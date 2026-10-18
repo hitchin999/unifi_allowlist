@@ -10,7 +10,7 @@
 const REFRESH_MS = 10000;
 // Bumped whenever this file changes, so the loaded build can be identified
 // from devtools: inspect the panel element and read data-panel-version.
-const PANEL_VERSION = "1.13.3";
+const PANEL_VERSION = "1.13.4";
 const MAX_ROWS = 300;
 // Each row carries seven <ha-icon> custom elements, and every one of those is a
 // element upgrade with its own shadow root. That is the whole cost of drawing
@@ -1657,7 +1657,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     try {
       row = btn
         ? btn.closest(".row")
-        : this.shadowRoot.querySelector(`.row[data-mac="${mac}"]`);
+        : this.shadowRoot.querySelector(`.row[data-mac="${CSS.escape(mac)}"]`);
     } catch (e) {
       row = null;
     }
@@ -2409,7 +2409,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       if (action === "rename") {
         // let the sheet finish closing before focusing the inline input
         setTimeout(() => {
-          const cell = this.shadowRoot.querySelector(`.name[data-mac="${mac}"]`);
+          const cell = this.shadowRoot.querySelector(`.name[data-mac="${CSS.escape(mac)}"]`);
           if (cell) this._startEdit(cell);
         }, 220);
         return;
@@ -3863,7 +3863,7 @@ class UnifiAllowlistPanel extends HTMLElement {
     const label = r.name || "";
 
     const name =
-      `<div class="name${label ? "" : " muted"}" data-mac="${r.mac}"` +
+      `<div class="name${label ? "" : " muted"}" data-mac="${this._esc(r.mac)}"` +
       ` role="button" tabindex="0" title="Click to rename">` +
       `<span>${this._esc(label || "no name reported")}</span>` +
       `<ha-icon class="pen" icon="mdi:pencil-outline"></ha-icon></div>`;
@@ -3905,7 +3905,7 @@ class UnifiAllowlistPanel extends HTMLElement {
       .join("");
 
     const btn = (svc, cls, icon, text) =>
-      `<button class="act ${cls}" data-mac="${r.mac}" data-service="${svc}" ${dis}>
+      `<button class="act ${cls}" data-mac="${this._esc(r.mac)}" data-service="${svc}" ${dis}>
          <span class="act-lbl"><ha-icon icon="${icon}"></ha-icon>${text}</span></button>`;
 
     const actions =
@@ -3923,7 +3923,7 @@ class UnifiAllowlistPanel extends HTMLElement {
           <span class="dot ${r.status}"></span>
         </span>`;
     return `
-      <div class="row${picked ? " picked" : ""}" data-mac="${r.mac}"
+      <div class="row${picked ? " picked" : ""}" data-mac="${this._esc(r.mac)}"
            ${this._selecting ? `role="checkbox" aria-checked="${picked}"` : ""}>
         ${ava}
         <div class="meta">
@@ -3933,7 +3933,7 @@ class UnifiAllowlistPanel extends HTMLElement {
         </div>
         <div class="side">
           <div class="actions">${actions}</div>
-          <button class="icon-btn kebab" data-mac="${r.mac}"
+          <button class="icon-btn kebab" data-mac="${this._esc(r.mac)}"
                   aria-label="Actions for ${this._esc(r.name || r.mac)}" ${dis}>
             <ha-icon icon="mdi:dots-vertical"></ha-icon>
           </button>

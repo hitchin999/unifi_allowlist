@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import time
 
 from homeassistant.core import HomeAssistant
@@ -30,6 +32,22 @@ _LOGGER = logging.getLogger(__name__)
 
 def _norm(mac: str) -> str:
     return str(mac).strip().lower()
+
+
+def normalize_mac(value) -> str:
+    """aa:bb:cc:dd:ee:ff, or "" when the value is not a MAC address.
+
+    Separators are optional - colons, dashes, dots or none - but there must be
+    exactly twelve hex digits. Anything else is rejected, so nothing that is
+    not a plain MAC can reach storage and from there the panel.
+    """
+    raw = str(value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f:.\-]+", raw):
+        return ""
+    digits = re.sub(r"[^0-9a-f]", "", raw)
+    if len(digits) != 12:
+        return ""
+    return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
 
 
 class DeviceStore:
@@ -62,12 +80,31 @@ class DeviceStore:
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
-        self.allowed = {_norm(k): v for k, v in (data.get("allowed") or {}).items()}
-        self.denied = {_norm(k): v for k, v in (data.get("denied") or {}).items()}
-        self.pending = {_norm(k): v for k, v in (data.get("pending") or {}).items()}
-        self.labels = {
-            _norm(k): v for k, v in (data.get("labels") or {}).items() if v
-        }
+        dropped: dict[str, int] = {}
+
+        def _clean(name: str, keep=lambda v: True) -> dict:
+            # Older versions stored whatever import_list was given. Keys that
+            # are not MAC addresses are dropped here, once, and the rest are
+            # put in one canonical form.
+            out: dict = {}
+            for key, val in (data.get(name) or {}).items():
+                mac = normalize_mac(key)
+                if not mac:
+                    dropped[name] = dropped.get(name, 0) + 1
+                    continue
+                if keep(val):
+                    out.setdefault(mac, val)
+            return out
+
+        self.allowed = _clean("allowed")
+        self.denied = _clean("denied")
+        self.pending = _clean("pending")
+        self.labels = _clean("labels", keep=bool)
+        if dropped:
+            _LOGGER.warning(
+                "dropped stored entries that are not MAC addresses: %s",
+                ", ".join(f"{n} from {k}" for k, n in dropped.items()),
+            )
         self.ids = {
             str(k): v for k, v in (data.get("ids") or {}).items() if isinstance(v, dict)
         }
@@ -92,6 +129,13 @@ class DeviceStore:
 
         mark = await self._mark_store.async_load() or {}
         self.high_water = int(mark.get("high_water") or 0)
+        if dropped.get("allowed") and self.high_water:
+            # Lower the mark by exactly what was dropped, so the cleanup is not
+            # mistaken for lost data - and a real loss still is.
+            self.high_water = max(0, self.high_water - dropped["allowed"])
+            await self._save_mark()
+        if dropped:
+            await self.async_save()
         if self.high_water < len(self.allowed):
             # First run, or the list has grown since we last looked.
             self.high_water = len(self.allowed)
@@ -410,16 +454,17 @@ class DeviceStore:
                 data = json.loads(raw)
             except ValueError:
                 data = None
-            if isinstance(data, list):
-                return [_norm(m) for m in data if str(m).strip()]
-            if isinstance(data, dict):
-                return [_norm(m) for m in data if str(m).strip()]
+            if isinstance(data, (list, dict)):
+                macs = [normalize_mac(m) for m in data]
+                return [m for m in macs if m]
 
+        # Only real MAC addresses are kept. Anything else on a line - a word, a
+        # path, a password - is dropped rather than added to a list.
         out: list[str] = []
         for line in raw.replace(",", "\n").splitlines():
-            token = line.strip().strip('"').strip("'")
-            if token and not token.startswith(("#", "//", "[", "]", "{", "}")):
-                out.append(_norm(token))
+            mac = normalize_mac(line.strip().strip('"').strip("'"))
+            if mac:
+                out.append(mac)
         return out
 
     async def async_import_file(
@@ -464,6 +509,7 @@ class DeviceStore:
         payload = json.dumps(sorted(table.keys()), indent=2)
 
         def _write() -> None:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(payload)
 

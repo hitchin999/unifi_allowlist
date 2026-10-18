@@ -142,8 +142,11 @@ import_list:
   fields:
     path:
       name: File path
+      description: >-
+        Inside /config/unifi_allowlist/, or a folder listed under
+        allowlist_external_dirs. Other paths are refused.
       required: true
-      example: /config/known_macs.json
+      example: /config/unifi_allowlist/known_macs.json
       selector:
         text:
     target:
@@ -170,8 +173,11 @@ export_list:
   fields:
     path:
       name: File path
+      description: >-
+        Inside /config/unifi_allowlist/, or a folder listed under
+        allowlist_external_dirs. Other paths are refused.
       required: true
-      example: /config/allow_list_backup.json
+      example: /config/unifi_allowlist/allow_list_backup.json
       selector:
         text:
     target:
