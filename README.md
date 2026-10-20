@@ -48,11 +48,25 @@ This integration is the middle path: no extra infrastructure, at the cost of a s
 
 ## Installation
 
-### HACS
+### HACS (recommended)
 
-1. HACS → Integrations → ⋮ → **Custom repositories**
-2. Add `https://github.com/hitchin999/unifi_allowlist`, category **Integration**
-3. Install, then restart Home Assistant
+UniFi Allow List is in the HACS default store, so there's nothing to add first:
+
+1. Open **HACS** and search for **UniFi Allow List**
+2. Open it, then **Download**, and restart Home Assistant
+3. Settings → Devices & Services → **Add Integration** → **UniFi Allow List**
+
+Or open it in HACS directly:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hitchin999&repository=unifi_allowlist&category=integration)
+
+### HACS custom repository (fallback)
+
+If it doesn't show up in the search (an older HACS, or before the store has refreshed):
+
+1. HACS → ⋮ → **Custom repositories**
+2. Add `https://github.com/hitchin999/unifi_allowlist`, type **Integration**
+3. Search for **UniFi Allow List**, **Download**, and restart Home Assistant
 4. Settings → Devices & Services → **Add Integration** → **UniFi Allow List**
 
 ### Manual
