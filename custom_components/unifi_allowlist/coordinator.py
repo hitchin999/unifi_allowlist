@@ -171,6 +171,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
         self.enforcing = True
         self.last_error: str | None = None
         self.wlan_names: dict[str, str] = {}
+        self._wlans_stamp = 0.0
         self.ap_names: dict[str, str] = {}
         self.wireless_aps: dict[str, str] = {}
         # Newest last_seen per MAC, so a device that drops off the controller's
@@ -657,8 +658,7 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             await self._auto_sync(known)
         await self._flush_notify_backlog()
 
-        if not self.wlan_names:
-            await self._refresh_wlans()
+        await self._maybe_refresh_wlans(known)
 
         await self._backfill_names(known)
 
@@ -854,15 +854,46 @@ class UnifiAllowlistCoordinator(DataUpdateCoordinator):
             radio, ""
         )
 
+    async def _maybe_refresh_wlans(self, known: list[dict]) -> None:
+        """Keep the wifi network id -> name map current.
+
+        It used to be read once and kept until a restart, so a network added or
+        renamed in UniFi went unnamed - and, with only some networks watched,
+        unwatched - for lookback devices. It is now re-read every
+        DEVICE_CACHE_SECONDS, and sooner when a client names a network id the
+        map does not know (UniFi Network 11 moved site ids to UUIDs, and may do
+        the same to network ids). At most once a minute, since a client of a
+        deleted network can carry its stale id for good.
+        """
+        age = time.time() - self._wlans_stamp
+        if age < KNOWN_REFRESH:
+            return
+        if age < DEVICE_CACHE_SECONDS and self.wlan_names:
+            ids = {
+                rec.get("wlanconf_id")
+                for rec in known or []
+                if rec.get("wlanconf_id") and not rec.get("is_wired")
+            }
+            if not ids - set(self.wlan_names):
+                return
+        await self._refresh_wlans()
+
     async def _refresh_wlans(self) -> None:
+        self._wlans_stamp = time.time()
         try:
             wlans = await self.client.wlans()
         except UnifiError as err:
+            # Keep the names we had; a failed read is no reason to lose them.
             _LOGGER.debug("could not read wlanconf: %s", err)
             return
-        self.wlan_names = {
-            w["_id"]: w.get("name", "") for w in wlans if w.get("_id")
+        names = {
+            w["_id"]: w.get("name", "")
+            for w in wlans or []
+            if isinstance(w, dict) and w.get("_id")
         }
+        if names != self.wlan_names:
+            _LOGGER.debug("wifi networks: %s", ", ".join(sorted(set(names.values()))))
+        self.wlan_names = names
 
     def _ssid_of(self, rec: dict) -> str:
         """Live records carry essid. Lookback records only have wlanconf_id."""
